@@ -13,3 +13,5 @@ env.bak/
 venv.bak/
 models/
 .pytest_cache/
+
+dist/

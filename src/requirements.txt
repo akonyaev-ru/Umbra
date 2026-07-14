@@ -20,3 +20,4 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 pypdf==6.14.2
 pyinstaller==6.21.0
+windnd==1.1.5

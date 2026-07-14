@@ -1,0 +1,15 @@
+# Устанавливаем поведение по умолчанию, если ОС не может определить текст это или бинарник
+* text=auto
+
+# Явно указываем текстовые файлы и нормализуем CRLF/LF для Windows
+*.py text eol=crlf
+*.txt text eol=crlf
+*.md text eol=crlf
+*.json text eol=crlf
+
+# Исключаем конвертацию для бинарников
+*.png binary
+*.ico binary
+*.ttf binary
+*.tar binary
+*.exe binary

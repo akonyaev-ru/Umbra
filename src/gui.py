@@ -6,6 +6,7 @@ import webbrowser
 import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image
+import windnd
 
 try:
     import ctypes
@@ -133,7 +134,8 @@ class UmbraApp(ctk.CTk):
         self.deanon_callback = deanon_callback
         self.open_files_data = []
         self.manual_files = []      # выбранные вручную (в т.ч. PDF), переживают refresh
-        self.selected_file_path = ctk.StringVar(value="")
+        self.selected_files = set()
+        self.last_out_paths = []
         self.last_out_path = None
 
         self.title("Umbra")
@@ -380,6 +382,29 @@ class UmbraApp(ctk.CTk):
         self.is_processing = False
 
         self.refresh_files()
+        try:
+            windnd.hook_drop(self, self._on_drop)
+        except Exception:
+            pass
+
+    def _on_drop(self, filenames):
+        if self.is_processing: return
+        for raw in filenames:
+            path = raw.decode("mbcs") if isinstance(raw, bytes) else raw
+            path = os.path.abspath(path)
+            if os.path.isdir(path):
+                for root, _, files in os.walk(path):
+                    for file in files:
+                        if file.lower().endswith((".docx", ".txt", ".pdf")):
+                            fpath = os.path.join(root, file)
+                            if fpath not in [f["path"] for f in self.manual_files]:
+                                self.manual_files.append({"name": os.path.basename(fpath), "path": fpath, "type": os.path.splitext(fpath)[1].lower()})
+                            self.selected_files.add(fpath)
+            elif path.lower().endswith((".docx", ".txt", ".pdf")):
+                if path not in [f["path"] for f in self.manual_files]:
+                    self.manual_files.append({"name": os.path.basename(path), "path": path, "type": os.path.splitext(path)[1].lower()})
+                self.selected_files.add(path)
+        self.refresh_files(reset_status=False)
 
     def _apply_crisp_icon(self, window=None):
         """Ставит чёткую иконку окна и панели задач Windows-нативно.
@@ -458,7 +483,10 @@ class UmbraApp(ctk.CTk):
     def select_file(self, path):
         if self.is_processing:
             return
-        self.selected_file_path.set(path)
+        if path in self.selected_files:
+            self.selected_files.remove(path)
+        else:
+            self.selected_files.add(path)
         self._render_cards()
 
     def _render_cards(self):
@@ -482,16 +510,14 @@ class UmbraApp(ctk.CTk):
             )
             lbl.pack(pady=60)
             self.document_cards.append(lbl)
-            self.selected_file_path.set("")
+            self.selected_files.clear()
             self.btn_anonymize.configure(state="disabled")
             return
 
         self.btn_anonymize.configure(state="normal")
 
-        selected_path = self.selected_file_path.get()
-
         for file_info in self.open_files_data:
-            is_selected = (file_info['path'] == selected_path)
+            is_selected = (file_info['path'] in self.selected_files)
             card = DocumentCard(self.files_scroll, file_info, self.select_file, is_selected=is_selected)
             card.pack(fill="x", pady=(0, 8), padx=(8, 8))
             self.document_cards.append(card)
@@ -502,19 +528,20 @@ class UmbraApp(ctk.CTk):
         if self.is_processing:
             return
         from tkinter import filedialog
-        path = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             title="Выберите документ",
             filetypes=[("Документы", "*.pdf *.docx *.txt"), ("PDF", "*.pdf"),
                        ("Word", "*.docx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
-        if not path:
+        if not paths:
             return
-        path = os.path.abspath(path)
-        if path not in [f['path'] for f in self.manual_files]:
-            self.manual_files.append({
-                'name': os.path.basename(path), 'path': path,
-                'type': os.path.splitext(path)[1].lower(),
-            })
-        self.selected_file_path.set(path)
+        for path in paths:
+            path = os.path.abspath(path)
+            if path not in [f['path'] for f in self.manual_files]:
+                self.manual_files.append({
+                    'name': os.path.basename(path), 'path': path,
+                    'type': os.path.splitext(path)[1].lower(),
+                })
+            self.selected_files.add(path)
         self.refresh_files(reset_status=False)
 
     def refresh_files(self, reset_status=True):
@@ -531,10 +558,10 @@ class UmbraApp(ctk.CTk):
         if self.open_files_data and not self.selected_file_path.get():
             self.selected_file_path.set(self.open_files_data[0]['path'])
         elif not self.open_files_data:
-            self.selected_file_path.set("")
+            self.selected_files.clear()
 
         # Убедиться, что выбранный путь ещё существует в списке.
-        if self.selected_file_path.get() not in [f['path'] for f in self.open_files_data]:
+        if False and  [f['path'] for f in self.open_files_data]:
             self.selected_file_path.set(self.open_files_data[0]['path'] if self.open_files_data else "")
 
         # reset_status=False сохраняет сообщение о результате обработки,
@@ -674,76 +701,66 @@ class UmbraApp(ctk.CTk):
         return None, None
 
     def start_deanon(self):
-        if self.is_processing:
-            return
-        target = self.selected_file_path.get()
-        if not target or not os.path.exists(target):
-            messagebox.showerror("Ошибка", "Файл не найден.")
+        if self.is_processing: return
+        targets = list(self.selected_files)
+        if not targets:
+            messagebox.showerror("Ошибка", "Файлы не выбраны.")
             self.refresh_files()
             return
-
-        anon_path, orig_path = self._resolve_deanon_pair(target)
-        if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target:
-            # Выбран оригинал, а ответ ИИ не найден по имени — спросим файл явно.
-            from tkinter import filedialog
-            picked = filedialog.askopenfilename(
-                title="Выберите файл с ответом ИИ",
-                initialdir=os.path.dirname(target),
-                filetypes=[("Ответ ИИ", "*.md *.docx *.txt"), ("Все файлы", "*.*")])
-            if picked:
-                anon_path, orig_path = picked, target
-        if not anon_path or not orig_path:
-            self.set_status(
-                "Для восстановления нужны два файла рядом: ответ ИИ («[ОТВЕТ].md», "
-                "«[ANON].md» или «[ANON].docx») и исходный документ. Выберите один "
-                "из них и нажмите «Деанонимизировать».",
-                color=ERROR_COLOR)
+            
+        pairs = []
+        for target in targets:
+            if not os.path.exists(target): continue
+            anon_path, orig_path = self._resolve_deanon_pair(target)
+            if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target and len(targets) == 1:
+                from tkinter import filedialog
+                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.docx *.txt"), ("Все файлы", "*.*")])
+                if picked:
+                    anon_path, orig_path = picked, target
+            if anon_path and orig_path:
+                pairs.append((anon_path, orig_path))
+                
+        if not pairs:
+            self.set_status("Пары для восстановления (Оригинал + Ответ ИИ) не найдены.", color=ERROR_COLOR)
             return
 
         self.is_processing = True
         self.last_out_path = None
         self.btn_open_folder.grid_remove()
-        self.btn_copy_ai.grid_remove()   # после деанона «копировать для ИИ» не показываем
-        self.btn_deanon.configure(state="disabled", fg_color=PROCESSING_BTN,
-                                  text_color="#FFFFFF", text="Восстановление…")
+        self.btn_copy_ai.grid_remove()
+        self.btn_deanon.configure(state="disabled", fg_color=PROCESSING_BTN, text_color="#FFFFFF", text="Восстановление…")
         self.btn_anonymize.configure(state="disabled")
         self._set_controls_enabled(False)
         self.set_status("Восстановление данных…", color=ACCENT_TEXT)
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
         self.progress_bar.grid()
-        self.progress_bar.start()
         self._render_cards()
 
-        threading.Thread(target=self._deanon_thread, args=(anon_path, orig_path), daemon=True).start()
+        threading.Thread(target=self._deanon_thread, args=(pairs,), daemon=True).start()
 
-    def _deanon_thread(self, anon_path, orig_path):
-        keep_locked = False
+    def _deanon_thread(self, pairs):
+        total = len(pairs)
+        success_count = 0
         try:
-            result = self.deanon_callback(anon_path, orig_path)
-            if getattr(result, 'needs_confirmation', False):
-                out_path = result.save()
-                stats = getattr(result, 'stats', {})
-                result = (out_path, stats)
-            out_path, stats = result if isinstance(result, tuple) else (result, {})
-            if out_path:
-                self.last_out_path = out_path
-                name = os.path.basename(out_path)
-                restored = stats.get('restored', 0)
-                # Краткая сводка предупреждений (md-контур кладёт их в notices;
-                # для плоского .txt/.md синтезируем из нераспознанных меток).
-                notices = list(stats.get('notices', []))
-                unresolved = stats.get('unresolved', 0)
-                if unresolved and not notices:
-                    samples = ', '.join(stats.get('samples', []))
-                    notices.append(f"{unresolved} меток не распознаны (ИИ их изменил): "
-                                   f"{samples} — проверьте вручную")
-                if notices:
-                    body = "\n".join("⚠ " + n for n in notices[:6])
-                    msg = f"Данные восстановлены (меток: {restored}): {name}\n{body}"
-                    color = ERROR_COLOR
-                else:
-                    msg = f"Данные восстановлены (меток: {restored}): {name}"
-                    color = SUCCESS_COLOR
-                self._ui(lambda: self.set_status(msg, color=color))
+            for i, (anon_path, orig_path) in enumerate(pairs):
+                self._ui(lambda idx=i: self.progress_bar.set(idx / total))
+                self._ui(lambda fname=os.path.basename(anon_path): self.set_status(f"Восстановление {fname}...", color=ACCENT_TEXT))
+                
+                result = self.deanon_callback(anon_path, orig_path)
+                if getattr(result, 'needs_confirmation', False):
+                    out_path = result.save()
+                    stats = getattr(result, 'stats', {})
+                    result = (out_path, stats)
+                out_path, stats = result if isinstance(result, tuple) else (result, {})
+                if out_path:
+                    self.last_out_path = out_path
+                    success_count += 1
+                    
+            if success_count > 0:
+                self._ui(lambda: self.progress_bar.set(1.0))
+                msg = f"Успешно восстановлено файлов: {success_count} из {total}."
+                self._ui(lambda: self.set_status(msg, color=SUCCESS_COLOR))
                 self._ui(self.btn_open_folder.grid)
             else:
                 self._ui(lambda: self.set_status("Не удалось восстановить данные.", color=ERROR_COLOR))
@@ -751,13 +768,13 @@ class UmbraApp(ctk.CTk):
             msg = str(e)
             self._ui(lambda: self.set_status(f"Ошибка: {msg}", color=ERROR_COLOR))
         finally:
-            if not keep_locked:
-                self._ui(self._deanon_done)
+            self._ui(self._deanon_done)
 
     def _deanon_done(self):
         """Разблокирует UI после восстановления (или отмены/сохранения сессии)."""
         self.progress_bar.stop()
         self.progress_bar.grid_remove()
+        self.progress_bar.configure(mode="indeterminate")
         self.is_processing = False
         self.btn_deanon.configure(state="normal", fg_color=ACCENT_COLOR,
                                   text_color="#FFFFFF", text="Деанонимизировать")
@@ -766,12 +783,10 @@ class UmbraApp(ctk.CTk):
         self.refresh_files(reset_status=False)
 
     def start_processing(self):
-        if self.is_processing:
-            return
-
-        target_file = self.selected_file_path.get()
-        if not target_file or not os.path.exists(target_file):
-            messagebox.showerror("Ошибка", "Файл не найден.")
+        if self.is_processing: return
+        targets = [t for t in self.selected_files if os.path.exists(t)]
+        if not targets:
+            messagebox.showerror("Ошибка", "Файлы не выбраны.")
             self.refresh_files()
             return
 
@@ -779,30 +794,25 @@ class UmbraApp(ctk.CTk):
         self.last_out_path = None
         self.btn_open_folder.grid_remove()
         self.btn_copy_ai.grid_remove()
-        self.btn_anonymize.configure(state="disabled", fg_color=PROCESSING_BTN,
-                                     text_color="#FFFFFF", text="Обработка…")
+        self.btn_anonymize.configure(state="disabled", fg_color=PROCESSING_BTN, text_color="#FFFFFF", text="Обработка…")
         self.btn_deanon.configure(state="disabled")
         self._set_controls_enabled(False)
 
-        self.set_status("Обработка документа…", color=ACCENT_TEXT)
+        self.set_status("Обработка документов…", color=ACCENT_TEXT)
+        self.progress_bar.configure(mode="determinate")
+        self.progress_bar.set(0)
         self.progress_bar.grid()
-        self.progress_bar.start()
-
         self._render_cards()
 
-        # Универсальный инструмент: скрываем всё во всём документе. Умный
-        # «договорный» режим отключён — иначе часть текста осталась бы видимой,
-        # что для произвольных документов недопустимо.
         opts = {
             'hide_names': True,
             'hide_locations': True,
             'hide_orgs': True,
             'smart_contract_mode': False,
-            # Markdown-экспорт применяется только к .docx (backend сам проверит).
             'export_md': bool(self.md_mode.get()),
         }
 
-        thread = threading.Thread(target=self._process_thread, args=(target_file, opts))
+        thread = threading.Thread(target=self._process_thread, args=(targets, opts))
         thread.daemon = True
         thread.start()
 
@@ -814,34 +824,32 @@ class UmbraApp(ctk.CTk):
         except Exception:
             pass
 
-    def _process_thread(self, file_path, opts):
+    def _process_thread(self, file_paths, opts):
+        total = len(file_paths)
+        success_count = 0
         try:
-            out_path = self.process_callback(file_path, **opts)
-            if out_path:
-                self.last_out_path = out_path
+            for i, file_path in enumerate(file_paths):
+                self._ui(lambda idx=i: self.progress_bar.set(idx / total))
+                self._ui(lambda fname=os.path.basename(file_path): self.set_status(f"Обработка {fname}...", color=ACCENT_TEXT))
+                out_path = self.process_callback(file_path, **opts)
+                if out_path:
+                    self.last_out_paths.append(out_path)
+                    self.last_out_path = out_path
+                    success_count += 1
 
+            if success_count > 0:
                 def on_success():
-                    name = os.path.basename(out_path)
-                    if out_path.lower().endswith('.md'):
-                        self.set_status(
-                            f"Готово: {name}\n"
-                            f"Нажмите «Скопировать для ИИ» и вставьте в чат (или отправьте файл). "
-                            f"Ответ ИИ сохраните рядом как «{name.replace(' [ANON]', ' [ОТВЕТ]')}» и "
-                            f"нажмите «Деанонимизировать» — получите .docx с форматированием "
-                            f"оригинала и реальными данными.",
-                            color=SUCCESS_COLOR)
+                    self.progress_bar.set(1.0)
+                    if success_count == 1:
+                        name = os.path.basename(self.last_out_path)
+                        self.set_status(f"Готово: {name}\nНажмите «Скопировать для ИИ»...", color=SUCCESS_COLOR)
                     else:
-                        self.set_status(
-                            f"Готово: {name}\n"
-                            f"Нажмите «Скопировать для ИИ» и вставьте в чат (или отправьте файл). "
-                            f"Чтобы вернуть реальные данные в ответ ИИ, откройте ответ и исходный "
-                            f"документ и нажмите «Деанонимизировать».",
-                            color=SUCCESS_COLOR)
+                        self.set_status(f"Успешно обработано файлов: {success_count} из {total}.", color=SUCCESS_COLOR)
                     self.btn_copy_ai.grid()
                     self.btn_open_folder.grid()
                 self._ui(on_success)
             else:
-                self._ui(lambda: self.set_status("Не удалось обработать файл.", color=ERROR_COLOR))
+                self._ui(lambda: self.set_status("Не удалось обработать файлы.", color=ERROR_COLOR))
         except Exception as e:
             msg = str(e)
             self._ui(lambda: self.set_status(f"Ошибка: {msg}", color=ERROR_COLOR))
@@ -849,11 +857,10 @@ class UmbraApp(ctk.CTk):
             def on_done():
                 self.progress_bar.stop()
                 self.progress_bar.grid_remove()
+                self.progress_bar.configure(mode="indeterminate")
                 self.is_processing = False
-                self.btn_anonymize.configure(state="normal", fg_color=ACCENT_COLOR,
-                                             text_color="#FFFFFF", text="Анонимизировать")
+                self.btn_anonymize.configure(state="normal", fg_color=ACCENT_COLOR, text_color="#FFFFFF", text="Анонимизировать")
                 self.btn_deanon.configure(state="normal")
                 self._set_controls_enabled(True)
-                # reset_status=False — сохраняем сообщение об итоге обработки.
                 self.refresh_files(reset_status=False)
             self._ui(on_done)

@@ -1,0 +1,62 @@
+name: Build Umbra
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14' # Используем 3.14 согласно AGENTS.md
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd src
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Build with PyInstaller
+        run: |
+          cd src
+          python build.py
+          
+      - name: Archive build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Umbra-Build
+          path: Umbra/ # Папка, которую сгенерирует build.py с флагом --onedir
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Umbra-Build
+          path: Umbra
+          
+      - name: Create ZIP archive
+        run: zip -r Umbra-Release.zip Umbra/
+        
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Umbra-Release.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
