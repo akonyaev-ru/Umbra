@@ -3,7 +3,6 @@ __pycache__/
 *$py.class
 build/
 *.spec
-*.exe
 .env
 .venv
 env/
