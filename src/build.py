@@ -23,6 +23,7 @@ def build():
         "--copy-metadata=natasha",
         "--copy-metadata=slovnet",
         "--copy-metadata=navec",
+        "-y",
         "--copy-metadata=razdel",
         "--distpath=../dist",
         "--name=Umbra"
