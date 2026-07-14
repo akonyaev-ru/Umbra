@@ -293,7 +293,7 @@ class UmbraApp(ctk.CTk):
 
         self.status_label = ctk.CTkLabel(
             self.status_container,
-            text="Выберите документ для обработки",
+            text="Выберите документ для обработки.\nВнимание: ИИ и эвристики не гарантируют 100% точности. Обязательно проверяйте результат перед отправкой!",
             text_color=MUTED_COLOR,
             font=ctk.CTkFont(family="Segoe UI", size=13),
             wraplength=640,
@@ -544,10 +544,12 @@ class UmbraApp(ctk.CTk):
             self.btn_copy_ai.grid_remove()
             if self.open_files_data:
                 self.set_status("Выберите документ и нажмите «Анонимизировать».\n"
-                                "Будут скрыты ФИО, организации, адреса, телефоны, e-mail и счета.")
+                                "Будут скрыты ФИО, организации, адреса, телефоны, e-mail и счета.\n"
+                                "Внимание: всегда проверяйте результат перед отправкой!")
             else:
                 self.set_status("Откройте документ в Word или нажмите «Выбрать файл» "
-                                "(поддерживаются .docx, .txt, .pdf).")
+                                "(поддерживаются .docx, .txt, .pdf).\n"
+                                "Внимание: всегда проверяйте результат перед отправкой!")
 
         self._render_cards()
 
@@ -630,96 +632,6 @@ class UmbraApp(ctk.CTk):
                 menu.grab_release()
             return 'break'
         widget.bind('<Button-3>', popup)
-
-    def _show_activation(self):
-        """Окно ввода лицензионного ключа. Главное окно в этот момент скрыто
-        (withdraw); закрытие окна активации завершает приложение."""
-        win = ctk.CTkToplevel(self, fg_color=BG_COLOR)
-        win.title("Umbra — активация")
-        win.resizable(False, False)
-        win.protocol("WM_DELETE_WINDOW", self._on_activation_close)
-        self.activation_window = win
-
-        card = ctk.CTkFrame(win, fg_color=FRAME_COLOR, corner_radius=16,
-                            border_width=2, border_color=BORDER_COLOR)
-        card.pack(fill="both", expand=True, padx=24, pady=24)
-
-        ctk.CTkLabel(
-            card, text="Активация Umbra",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-            text_color=TEXT_COLOR,
-        ).pack(padx=36, pady=(28, 4))
-        ctk.CTkLabel(
-            card, text="Введите лицензионный ключ",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=MUTED_COLOR,
-        ).pack(padx=36, pady=(0, 16))
-
-        self.activation_entry = ctk.CTkEntry(
-            card, width=320, height=40, corner_radius=8,
-            font=ctk.CTkFont(family="Consolas", size=14),
-            fg_color=BG_COLOR, border_color=BORDER_COLOR, border_width=2,
-            text_color=TEXT_COLOR, placeholder_text="Лицензионный ключ",
-        )
-        self.activation_entry.pack(padx=36)
-        try:
-            self.activation_entry._entry.configure(justify='center')
-        except Exception:
-            pass
-        self._bind_clipboard_keycodes(self.activation_entry)
-        self._attach_entry_context_menu(self.activation_entry)
-        self.activation_entry.bind('<Return>', lambda e: self._try_activate())
-
-        self.activation_status = ctk.CTkLabel(
-            card, text="", font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color=ERROR_COLOR, wraplength=320,
-        )
-        self.activation_status.pack(padx=36, pady=(10, 0))
-
-        ctk.CTkButton(
-            card, text="Активировать", width=320, height=44, corner_radius=8,
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            fg_color=ACCENT_COLOR, hover_color=ACCENT_HOVER, text_color="#FFFFFF",
-            command=self._try_activate,
-        ).pack(padx=36, pady=(8, 6))
-
-        ctk.CTkLabel(
-            card, text="Нет ключа? Напишите: inbox@akonyaev.ru",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=MUTED_COLOR,
-        ).pack(padx=36, pady=(4, 24))
-
-        # Центр экрана, на передний план, фокус в поле ввода.
-        win.update_idletasks()
-        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-        x = (win.winfo_screenwidth() - w) // 2
-        y = (win.winfo_screenheight() - h) // 3
-        win.geometry(f"+{x}+{y}")
-        win.lift()
-        win.focus_force()
-        self.activation_entry.focus_set()
-        # Чёткая иконка — ПОСЛЕ донастройки CTkToplevel (он сам трогает иконку
-        # через 200 мс, поэтому 300).
-        self.after(300, lambda: self._apply_crisp_icon(win))
-
-    def _on_activation_close(self):
-        # Без активации приложение не работает — закрываем целиком.
-        self.destroy()
-
-    def _try_activate(self):
-        key = self.activation_entry.get()
-        ok, reason = licensing.activate(key)
-        if not ok:
-            self.activation_status.configure(
-                text=reason or "Ключ не подходит. Проверьте и попробуйте ещё раз.")
-            return
-        win = self.activation_window
-        self.activation_window = None
-        if win is not None and win.winfo_exists():
-            win.destroy()
-        self.deiconify()
-        self.lift()
-        self.refresh_files()
 
     def on_closing(self):
         self.destroy()

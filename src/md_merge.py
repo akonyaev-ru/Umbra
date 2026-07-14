@@ -662,7 +662,6 @@ def merge_ai_md(ai_text, base_blocks, mapping, notes, apply_spans):
             elif b['kind'] == 'frozen':
                 report['frozen_touched'].append(
                     'замороженная таблица изменена ИИ — оставлена оригинальная (' + b['norm'][:60] + '…)')
-                matched_base += 0
         elif kind == 'merged':
             (b1, b2), a = op[1], op[2]
             blk1, blk2 = base_main[b1], base_main[b2]

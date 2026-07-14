@@ -20,7 +20,7 @@ class DocumentProcessor:
     #  Анонимизация                                                        #
     # ------------------------------------------------------------------ #
     def process_file(self, file_path, hide_names=True, hide_locations=True,
-                     hide_orgs=True, smart_contract_mode=False, export_md=False):
+                     hide_orgs=True, hide_dates=False, smart_contract_mode=False, export_md=False):
         """Анонимизирует .txt/.docx, сохраняет '<имя> [ANON].<ext>' рядом.
 
         Дефолт smart_contract_mode=False намеренно совпадает с deanonymize_file и
@@ -40,26 +40,32 @@ class DocumentProcessor:
 
         if export_md and ext.lower() == '.docx':
             return self._process_docx_to_md(file_path, os.path.join(file_dir, f"{name} [ANON].md"),
-                                            hide_names, hide_locations, hide_orgs, smart_contract_mode)
+                                            hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
 
         # PDF: точную вёрстку не восстановить, поэтому выдаём обезличенный ТЕКСТ
         # ('[ANON].txt'), а не .pdf. Деанон ответа ИИ идёт в .txt/.md.
         if ext.lower() == '.pdf':
             out_path = os.path.join(file_dir, f"{name} [ANON].txt")
-            self._process_pdf(file_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._process_pdf(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
             return out_path
 
         out_path = os.path.join(file_dir, f"{name} [ANON]{ext}")
         if ext.lower() == '.txt':
-            self._process_txt(file_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._process_txt(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext.lower() == '.docx':
-            self._process_docx(file_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._process_docx(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        elif ext.lower() == '.xlsx':
+            self._process_xlsx(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        elif ext.lower() == '.csv':
+            self._process_csv(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        elif ext.lower() == '.html':
+            self._process_html(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
         return out_path
 
-    def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         """PDF → извлечённый текст → анонимизация → '[ANON].txt'. Скан без
         текстового слоя — понятная ошибка."""
         import pdf_reader
@@ -70,7 +76,7 @@ class DocumentProcessor:
         mapper = PlaceholderMapper()
         lines_nl = [l + '\n' for l in lines]
         out_lines = self._anonymize_lines(lines_nl, mapper, hide_names, hide_locations,
-                                          hide_orgs, smart_contract_mode)
+                                          hide_orgs, hide_dates, smart_contract_mode)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.writelines(out_lines)
         return mapper
@@ -124,7 +130,7 @@ class DocumentProcessor:
         return issues
 
     def _process_docx_to_md(self, in_path, out_path, hide_names, hide_locations,
-                            hide_orgs, smart_contract_mode):
+                            hide_orgs, hide_dates, smart_contract_mode):
         """Создаёт только [ANON].md. [ANON].docx НЕ создаётся: юрист не должен
         путаться, какой файл отправлять ИИ."""
         from md_serializer import serialize_document
@@ -135,7 +141,7 @@ class DocumentProcessor:
             raise ValueError('Документ нужно подготовить: ' + '; '.join(issues) + '.')
 
         mapper = PlaceholderMapper()
-        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         md_text, _blocks, _notes = serialize_document(doc, mapper)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.write(md_text)
@@ -172,16 +178,16 @@ class DocumentProcessor:
             is_anonymizing = True
         return is_anonymizing
 
-    def _process_txt(self, in_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _process_txt(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         with open(in_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         mapper = PlaceholderMapper()
-        out_lines = self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+        out_lines = self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.writelines(out_lines)
         return mapper
 
-    def _anonymize_lines(self, lines, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _anonymize_lines(self, lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         extra = self._build_extra_from_texts(lines)
         is_anonymizing = True
         out_lines = []
@@ -267,7 +273,7 @@ class DocumentProcessor:
             if changed:
                 part._blob = serialize_part_xml(root)
 
-    def _process_docx(self, in_path, out_path, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _process_docx(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         doc = Document(in_path)
         # Тот же барьер, что и в md-контуре: поля (w:fldSimple), надписи
         # (w:txbxContent), смарт-теги, поля-конструкторы и непринятые правки
@@ -278,11 +284,11 @@ class DocumentProcessor:
         if issues:
             raise ValueError('Документ нужно подготовить: ' + '; '.join(issues) + '.')
         mapper = PlaceholderMapper()
-        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         doc.save(out_path)
         return mapper
 
-    def _anonymize_doc(self, doc, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _anonymize_doc(self, doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         """Анонимизирует объект Document на месте, наполняя mapper. Порядок
         обхода детерминирован — важно для повторного построения карты из оригинала."""
         # Проход 1: собрать имена/названия по ВСЕМУ документу — тело, таблицы,
@@ -298,11 +304,11 @@ class DocumentProcessor:
             if smart_contract_mode:
                 is_anonymizing = self._smart_toggle(para.text, is_anonymizing)
             if is_anonymizing:
-                self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, extra, mapper)
+                self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, hide_dates, extra, mapper)
 
         # Таблицы (fail-safe: по умолчанию анонимизируем).
         for table in doc.tables:
-            self._process_table(table, hide_names, hide_locations, hide_orgs,
+            self._process_table(table, hide_names, hide_locations, hide_orgs, hide_dates,
                                 smart_contract_mode, True, extra, mapper)
 
         # Колонтитулы (всегда, вне smart-режима).
@@ -314,17 +320,17 @@ class DocumentProcessor:
                 if hf is None or hf.is_linked_to_previous:
                     continue
                 for para in hf.paragraphs:
-                    self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, extra, mapper)
+                    self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, hide_dates, extra, mapper)
                 for table in hf.tables:
-                    self._process_table(table, hide_names, hide_locations, hide_orgs,
+                    self._process_table(table, hide_names, hide_locations, hide_orgs, hide_dates,
                                         False, True, extra, mapper)
 
         # Сноски и концевые сноски (всегда, вне smart-режима): это служебные
         # примечания, а не «тело договора», но ПДн в них утекают так же.
         self._process_note_parts(doc, lambda para: self._anonymize_paragraph(
-            para, hide_names, hide_locations, hide_orgs, extra, mapper))
+            para, hide_names, hide_locations, hide_orgs, hide_dates, extra, mapper))
 
-    def _process_table(self, table, hide_names, hide_locations, hide_orgs,
+    def _process_table(self, table, hide_names, hide_locations, hide_orgs, hide_dates,
                        smart_contract_mode, is_anonymizing, extra, mapper):
         for row in table.rows:
             for cell in row.cells:
@@ -332,20 +338,20 @@ class DocumentProcessor:
                     if smart_contract_mode:
                         is_anonymizing = self._smart_toggle(para.text, is_anonymizing)
                     if is_anonymizing:
-                        self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, extra, mapper)
+                        self._anonymize_paragraph(para, hide_names, hide_locations, hide_orgs, hide_dates, extra, mapper)
                 for nested in cell.tables:
                     is_anonymizing = self._process_table(
-                        nested, hide_names, hide_locations, hide_orgs,
+                        nested, hide_names, hide_locations, hide_orgs, hide_dates,
                         smart_contract_mode, is_anonymizing, extra, mapper)
         return is_anonymizing
 
-    def _anonymize_paragraph(self, paragraph, hide_names, hide_locations, hide_orgs, extra, mapper):
+    def _anonymize_paragraph(self, paragraph, hide_names, hide_locations, hide_orgs, hide_dates, extra, mapper):
         """Анонимизирует абзац на месте. Возвращает True, если что-то заменено
         (нужно для сносок: сериализуем часть обратно только при изменениях)."""
         if not paragraph.text.strip():
             return False
         replacements = self.nlp.extract_entities(
-            paragraph.text, hide_names, hide_locations, hide_orgs, extra_patterns=extra)
+            paragraph.text, hide_names, hide_locations, hide_orgs, hide_dates=hide_dates, extra_patterns=extra)
         if not replacements:
             return False
         # Метки-номера присваиваем слева направо (replacements идут справа-налево).
@@ -395,7 +401,7 @@ class DocumentProcessor:
     #  Деанонимизация (восстановление)                                    #
     # ------------------------------------------------------------------ #
     def deanonymize_file(self, new_path, source_path, hide_names=True, hide_locations=True,
-                         hide_orgs=True, smart_contract_mode=False):
+                         hide_orgs=True, hide_dates=False, smart_contract_mode=False):
         """Восстанавливает данные в 'new_path' (документ от ИИ с метками).
         source_path — исходный документ (.docx/.txt) или файл-ключ '[КЛЮЧ].json'.
         Сохраняет '<имя> [DEANON].<ext>'. Возвращает (out_path, stats), где
@@ -406,7 +412,7 @@ class DocumentProcessor:
             raise FileNotFoundError(f"Source not found: {source_path}")
         self.nlp.clear_ner_cache()
 
-        mapping = self._load_mapping(source_path, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+        mapping = self._load_mapping(source_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         if not mapping:
             raise ValueError("Карта замен пуста — нечего восстанавливать.")
 
@@ -421,6 +427,12 @@ class DocumentProcessor:
             stats = self._deanon_txt(new_path, out_path, mapping, tol_re)
         elif ext.lower() == '.docx':
             stats = self._deanon_docx(new_path, out_path, mapping, tol_re)
+        elif ext.lower() == '.xlsx':
+            stats = self._deanon_xlsx(new_path, out_path, mapping, tol_re)
+        elif ext.lower() == '.csv':
+            stats = self._deanon_csv(new_path, out_path, mapping, tol_re)
+        elif ext.lower() == '.html':
+            stats = self._deanon_html(new_path, out_path, mapping, tol_re)
         elif ext.lower() == '.md':
             # Ответ ИИ в markdown: полный контур с восстановлением .docx
             # (форматирование оригинала + правки ИИ). Возвращает СЕССИЮ —
@@ -431,7 +443,7 @@ class DocumentProcessor:
                 stats = self._deanon_txt(new_path, out_path, mapping, tol_re)
                 return out_path, stats
             return self._deanon_md(new_path, source_path, mapping,
-                                   hide_names, hide_locations, hide_orgs, smart_contract_mode)
+                                   hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
         return out_path, stats
@@ -440,7 +452,7 @@ class DocumentProcessor:
     #  Markdown-контур (восстановление .docx из ответа ИИ)                #
     # ------------------------------------------------------------------ #
     def _deanon_md(self, ai_md_path, source_path, mapping,
-                   hide_names, hide_locations, hide_orgs, smart_contract_mode):
+                   hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         """Трёхстороннее слияние: правки из md от ИИ вживляются в копию
         оригинала, затем метки заменяются реальными данными В ПАМЯТИ.
         Возвращает MdDeanonSession (needs_confirmation=True): документ ещё НЕ
@@ -452,7 +464,7 @@ class DocumentProcessor:
         #    слияния и базовые блоки рождаются вместе — рассинхрон исключён.
         doc = Document(source_path)
         mapper = PlaceholderMapper()
-        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+        self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
 
         # 2. Карта восстановления — из повторной анонимизации оригинала. Файл-ключ
         #    .umbra убран (один выходной файл проще); поэтому восстановление
@@ -597,7 +609,7 @@ class DocumentProcessor:
         alt = '|'.join(re.escape(c) for c in sorted(cats, key=len, reverse=True))
         return re.compile(r'\[\s*(' + alt + r')[\s_\-]*(\d+)\s*\]', re.IGNORECASE)
 
-    def _load_mapping(self, source_path, hide_names, hide_locations, hide_orgs, smart_contract_mode):
+    def _load_mapping(self, source_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         ext = os.path.splitext(source_path)[1].lower()
         if ext == '.json':
             with open(source_path, 'r', encoding='utf-8') as f:
@@ -607,15 +619,15 @@ class DocumentProcessor:
         mapper = PlaceholderMapper()
         if ext == '.docx':
             doc = Document(source_path)
-            self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext == '.txt':
             with open(source_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-            self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext == '.pdf':
             import pdf_reader
             lines = [l + '\n' for l in pdf_reader.extract_lines(source_path)]
-            self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, smart_contract_mode)
+            self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         else:
             raise ValueError("Источник восстановления: .json (ключ) или .docx/.txt/.pdf (оригинал).")
         return mapper.mapping
@@ -667,11 +679,8 @@ class DocumentProcessor:
             self._apply_span_replacements(paragraph, reps)
         return restored, unresolved
 
-    def _deanon_txt(self, in_path, out_path, mapping, tol_re):
-        with open(in_path, 'r', encoding='utf-8') as f:
-            text = f.read()
-        stats = {'restored': 0, 'unresolved': 0, 'samples': []}
-
+    def _restore_text_multipass(self, text, mapping, tol_re, stats):
+        RESTORE_MAX_PASSES = 10
         def repl(m):
             val = mapping.get(self._canonical(m))
             if val is not None:
@@ -683,10 +692,126 @@ class DocumentProcessor:
             return m.group(0)
 
         if tol_re is not None:
-            text = tol_re.sub(repl, text)
+            for _ in range(RESTORE_MAX_PASSES):
+                prev = text
+                text = tol_re.sub(repl, text)
+                if text == prev:
+                    break
+        return text
+
+    def _deanon_txt(self, in_path, out_path, mapping, tol_re):
+        with open(in_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        stats = {'restored': 0, 'unresolved': 0, 'samples': []}
+        text = self._restore_text_multipass(text, mapping, tol_re, stats)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.write(text)
         return stats
+
+    def _deanon_html(self, in_path, out_path, mapping, tol_re):
+        with open(in_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        stats = {'restored': 0, 'unresolved': 0, 'samples': []}
+        text = self._restore_text_multipass(text, mapping, tol_re, stats)
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        return stats
+
+    def _deanon_csv(self, in_path, out_path, mapping, tol_re):
+        import csv
+        stats = {'restored': 0, 'unresolved': 0, 'samples': []}
+        rows = []
+        with open(in_path, encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                rows.append([self._restore_text_multipass(cell, mapping, tol_re, stats) for cell in row])
+        with open(out_path, "w", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(rows)
+        return stats
+
+    def _deanon_xlsx(self, in_path, out_path, mapping, tol_re):
+        import openpyxl
+        stats = {'restored': 0, 'unresolved': 0, 'samples': []}
+        wb = openpyxl.load_workbook(str(in_path))
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.value and isinstance(cell.value, str):
+                        cell.value = self._restore_text_multipass(cell.value, mapping, tol_re, stats)
+        wb.save(str(out_path))
+        return stats
+
+    def _process_html(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
+        from html.parser import HTMLParser
+        mapper = PlaceholderMapper()
+
+        class HtmlAnonymizer(HTMLParser):
+            def __init__(self, nlp):
+                super().__init__(convert_charrefs=False)
+                self.output = []
+                self.nlp = nlp
+
+            def handle_starttag(self, tag, attrs):
+                attr_str = ""
+                for name, val in attrs:
+                    if val is None:
+                        attr_str += f" {name}"
+                    else:
+                        attr_str += f' {name}="{val}"'
+                self.output.append(f"<{tag}{attr_str}>")
+
+            def handle_endtag(self, tag):
+                self.output.append(f"</{tag}>")
+
+            def handle_data(self, data):
+                self.output.append(self.nlp.anonymize_text(data, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper))
+
+            def handle_comment(self, data):
+                self.output.append(f"<!--{data}-->")
+
+            def handle_decl(self, decl):
+                self.output.append(f"<!{decl}>")
+
+            def unknown_decl(self, data):
+                self.output.append(f"<![{data}]>")
+
+            def handle_entityref(self, name):
+                self.output.append(f"&{name};")
+
+            def handle_charref(self, name):
+                self.output.append(f"&#{name};")
+
+        with open(in_path, 'r', encoding="utf-8", errors="replace") as f:
+            src = f.read()
+        parser = HtmlAnonymizer(self.nlp)
+        parser.feed(src)
+        with open(out_path, 'w', encoding="utf-8") as f:
+            f.write("".join(parser.output))
+        return mapper
+
+    def _process_csv(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
+        import csv
+        mapper = PlaceholderMapper()
+        rows = []
+        with open(in_path, encoding="utf-8", errors="replace", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                rows.append([self.nlp.anonymize_text(cell, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper) for cell in row])
+        with open(out_path, "w", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(rows)
+        return mapper
+
+    def _process_xlsx(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
+        import openpyxl
+        mapper = PlaceholderMapper()
+        wb = openpyxl.load_workbook(str(in_path))
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.value and isinstance(cell.value, str):
+                        cell.value = self.nlp.anonymize_text(cell.value, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper)
+        wb.save(str(out_path))
+        return mapper
 
 
 class MdDeanonSession:
