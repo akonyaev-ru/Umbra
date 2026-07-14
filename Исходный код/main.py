@@ -1,0 +1,32 @@
+from gui import UmbraApp
+from doc_processor import DocumentProcessor
+from nlp_engine import NLPProcessor
+
+doc_proc_instance = None
+
+def get_doc_proc():
+    global doc_proc_instance
+    if doc_proc_instance is None:
+        nlp = NLPProcessor()
+        doc_proc_instance = DocumentProcessor(nlp)
+    return doc_proc_instance
+
+def process_file_wrapper(file_path, **opts):
+    # Вызывается из фонового потока GUI. НЕ показываем messagebox отсюда
+    # (Tkinter не потокобезопасен) — даём исключению всплыть в _process_thread,
+    # который выводит ошибку в UI через self.after(0, ...).
+    proc = get_doc_proc()
+    return proc.process_file(file_path, **opts)
+
+def deanonymize_wrapper(new_path, source_path):
+    # Восстановление данных: документ от ИИ + ключ или оригинал.
+    proc = get_doc_proc()
+    return proc.deanonymize_file(new_path, source_path)
+
+def main():
+    app = UmbraApp(process_callback=process_file_wrapper,
+                   deanon_callback=deanonymize_wrapper)
+    app.mainloop()
+
+if __name__ == "__main__":
+    main()

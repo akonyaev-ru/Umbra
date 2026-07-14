@@ -1,0 +1,32 @@
+# UTF-8. Version resource for the Umbra .exe (PyInstaller --version-file).
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(2, 1, 0, 0),
+    prodvers=(2, 1, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '041904B0',  # lang=0x0419 (Russian), charset=0x04B0 (1200, Unicode)
+        [
+          StringStruct('CompanyName', 'Алексей Коняев'),
+          StringStruct('FileDescription', 'Umbra — анонимизация юридических документов'),
+          StringStruct('FileVersion', '2.1.0'),
+          StringStruct('InternalName', 'Umbra'),
+          StringStruct('LegalCopyright', '© Алексей Коняев · inbox@akonyaev.ru'),
+          StringStruct('OriginalFilename', 'Umbra.exe'),
+          StringStruct('ProductName', 'Umbra'),
+          StringStruct('ProductVersion', '2.1.0'),
+          StringStruct('Comments', 'Автор: Алексей Коняев. Контакт для связи: inbox@akonyaev.ru')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [0x0419, 1200])])
+  ]
+)

@@ -1,0 +1,22 @@
+# Зависимости Umbra с зафиксированными версиями (проверены и рабочие).
+# Установка: python -m pip install -r requirements.txt
+#
+# ВАЖНО (безопасность): python-docx ПИНИМ жёстко. «Второй рубеж» от утечки ПДн
+# (md_serializer._ParaRenderer.render и paragraph.text) опирается на то, что в
+# 1.2.0 paragraph.text = xpath("w:r | w:hyperlink"). На другой версии, где .text
+# считает иначе (напр. без hyperlink), поведение анонимайзера может разойтись с
+# сериализатором — не обновлять без перепроверки этого инварианта.
+
+customtkinter==6.0.0
+python-docx==1.2.0
+navec==0.10.0
+slovnet==0.6.0
+razdel==0.5.0
+natasha==1.6.0
+psutil==7.2.2
+pywin32==312
+pillow==12.3.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+pypdf==6.14.2
+pyinstaller==6.21.0
