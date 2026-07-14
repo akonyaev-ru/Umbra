@@ -52,7 +52,7 @@ def build():
     # Explicitly add all internal modules since PyInstaller can't read their imports from obfuscated code
     internal_modules = [
         "gui", "nlp_engine", "doc_processor", "md_serializer", "md_merge",
-        "file_detector", "licensing", "clipboard_util", "pdf_reader",
+        "file_detector", "clipboard_util", "pdf_reader",
     ]
     for mod in internal_modules:
         cmd.append(f"--hidden-import={mod}")

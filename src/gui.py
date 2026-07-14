@@ -24,7 +24,6 @@ except Exception:
     pass
 
 from file_detector import get_open_files
-import licensing
 
 # Следуем системной теме Windows (светлая/тёмная).
 ctk.set_appearance_mode("System")
@@ -380,13 +379,7 @@ class UmbraApp(ctk.CTk):
 
         self.is_processing = False
 
-        # Шлюз активации (§10a AGENTS.md): без валидного ключа главное окно
-        # скрыто, показывается окно ввода лицензионного ключа.
-        if licensing.is_activated():
-            self.refresh_files()
-        else:
-            self.withdraw()
-            self._show_activation()
+        self.refresh_files()
 
     def _apply_crisp_icon(self, window=None):
         """Ставит чёткую иконку окна и панели задач Windows-нативно.
@@ -595,7 +588,6 @@ class UmbraApp(ctk.CTk):
         except Exception as e:
             self.set_status(f"Не удалось скопировать: {e}", color=ERROR_COLOR)
 
-    # ---------------- Активация по лицензионному ключу ---------------- #
     def _bind_clipboard_keycodes(self, widget):
         """Ctrl+V/C/X/A по ФИЗИЧЕСКИМ кодам клавиш: в русской раскладке keysym
         кириллический и обычные бинды <Control-v> не срабатывают (§10.6
