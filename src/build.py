@@ -12,7 +12,7 @@ def build():
         "-m",
         "PyInstaller",
         "--noconsole",
-        "--onedir",
+        "--onefile",
         "--icon=icon_purple.ico",
         "--version-file=version_info.txt",
         "--add-data=icon_purple.ico;.",
@@ -25,7 +25,7 @@ def build():
         "--copy-metadata=navec",
         "-y",
         "--copy-metadata=razdel",
-        "--distpath=../dist",
+        "--distpath=..",
         "--name=Umbra"
     ]
 
