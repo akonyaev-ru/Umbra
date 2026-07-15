@@ -88,8 +88,9 @@ jobs:
 
       - name: Archive build
         run: |
-          # Упаковываем .app бандл в tar.gz, чтобы сохранить права доступа
-          tar -czf Umbra-macOS.tar.gz Umbra.app
+          mkdir Umbra-macOS
+          mv Umbra.app Umbra-macOS/
+          tar -czf Umbra-macOS.tar.gz Umbra-macOS/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -127,7 +128,9 @@ jobs:
 
       - name: Archive build
         run: |
-          tar -czf Umbra-Linux.tar.gz Umbra
+          mkdir Umbra-Linux
+          mv Umbra Umbra-Linux/
+          tar -czf Umbra-Linux.tar.gz Umbra-Linux/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -159,14 +162,16 @@ jobs:
           name: Umbra-Linux
 
       - name: Create ZIP archive
-        run: zip Umbra-Release.zip Umbra.exe
+        run: |
+          mkdir Umbra-Windows
+          mv Umbra.exe Umbra-Windows/
+          zip -r Umbra-Windows.zip Umbra-Windows/
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Umbra.exe
-            Umbra-Release.zip
+            Umbra-Windows.zip
             Umbra-macOS.tar.gz
             Umbra-Linux.tar.gz
         env:
