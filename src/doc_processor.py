@@ -50,7 +50,17 @@ class DocumentProcessor:
             return out_path
 
         out_path = os.path.join(file_dir, f"{name} [ANON]{ext}")
-        if ext.lower() == '.txt':
+        if ext.lower() == '.doc':
+            # Convert to docx first
+            temp_docx = self._convert_doc_to_docx(file_path)
+            # The output will be .docx
+            out_path = os.path.join(file_dir, f"{name} [ANON].docx")
+            try:
+                self._process_docx(temp_docx, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+            finally:
+                if os.path.exists(temp_docx):
+                    os.remove(temp_docx)
+        elif ext.lower() == '.txt':
             self._process_txt(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext.lower() == '.docx':
             self._process_docx(file_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
@@ -64,6 +74,33 @@ class DocumentProcessor:
             raise ValueError(f"Unsupported file extension: {ext}")
 
         return out_path
+
+    def _convert_doc_to_docx(self, doc_path):
+        import pythoncom
+        import win32com.client
+        import tempfile
+        import uuid
+        
+        try:
+            pythoncom.CoInitialize()
+        except Exception:
+            pass # Already initialized
+            
+        word = None
+        try:
+            word = win32com.client.Dispatch("Word.Application")
+            word.Visible = False
+            wb = word.Documents.Open(os.path.abspath(doc_path))
+            temp_dir = tempfile.gettempdir()
+            docx_path = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}.docx")
+            wb.SaveAs2(docx_path, FileFormat=16) # wdFormatXMLDocument
+            wb.Close()
+            return docx_path
+        except Exception as e:
+            raise RuntimeError(f"Не удалось конвертировать .doc в .docx. Убедитесь, что установлен Microsoft Word: {e}")
+        finally:
+            if word:
+                word.Quit()
 
     def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         """PDF → извлечённый текст → анонимизация → '[ANON].txt'. Скан без
@@ -425,6 +462,15 @@ class DocumentProcessor:
         tol_re = self._build_tolerant_re(mapping)
         if ext.lower() == '.txt':
             stats = self._deanon_txt(new_path, out_path, mapping, tol_re)
+        elif ext.lower() == '.doc':
+            # If the source is .doc, the output should be .docx
+            out_path = os.path.join(file_dir, f"{clean} [DEANON].docx")
+            temp_docx = self._convert_doc_to_docx(source_path)
+            try:
+                stats = self._deanon_docx(new_path, out_path, mapping, tol_re, temp_source_path=temp_docx)
+            finally:
+                if os.path.exists(temp_docx):
+                    os.remove(temp_docx)
         elif ext.lower() == '.docx':
             stats = self._deanon_docx(new_path, out_path, mapping, tol_re)
         elif ext.lower() == '.xlsx':
@@ -620,6 +666,14 @@ class DocumentProcessor:
         if ext == '.docx':
             doc = Document(source_path)
             self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        elif ext == '.doc':
+            temp_docx = self._convert_doc_to_docx(source_path)
+            try:
+                doc = Document(temp_docx)
+                self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+            finally:
+                if os.path.exists(temp_docx):
+                    os.remove(temp_docx)
         elif ext == '.txt':
             with open(source_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
@@ -638,8 +692,9 @@ class DocumentProcessor:
         [КАТЕГОРИЯ_N] для поиска в карте."""
         return '[' + match.group(1).upper() + '_' + match.group(2) + ']'
 
-    def _deanon_docx(self, in_path, out_path, mapping, tol_re):
-        doc = Document(in_path)
+    def _deanon_docx(self, in_path, out_path, mapping, tol_re, temp_source_path=None):
+        # Если temp_source_path передан (для .doc), используем его вместо in_path
+        doc = Document(temp_source_path if temp_source_path else in_path)
         restored, unresolved = 0, []
         if tol_re is not None:
             for para in self._iter_paragraphs(doc):

@@ -395,12 +395,12 @@ class UmbraApp(ctk.CTk):
             if os.path.isdir(path):
                 for root, _, files in os.walk(path):
                     for file in files:
-                        if file.lower().endswith((".docx", ".xlsx", ".txt", ".pdf")):
+                        if file.lower().endswith((".doc", ".docx", ".xlsx", ".txt", ".pdf")):
                             fpath = os.path.join(root, file)
                             if fpath not in [f["path"] for f in self.manual_files]:
                                 self.manual_files.append({"name": os.path.basename(fpath), "path": fpath, "type": os.path.splitext(fpath)[1].lower()})
                             self.selected_files.add(fpath)
-            elif path.lower().endswith((".docx", ".xlsx", ".txt", ".pdf")):
+            elif path.lower().endswith((".doc", ".docx", ".xlsx", ".txt", ".pdf")):
                 if path not in [f["path"] for f in self.manual_files]:
                     self.manual_files.append({"name": os.path.basename(path), "path": path, "type": os.path.splitext(path)[1].lower()})
                 self.selected_files.add(path)
@@ -530,8 +530,8 @@ class UmbraApp(ctk.CTk):
         from tkinter import filedialog
         paths = filedialog.askopenfilenames(
             title="Выберите документ",
-            filetypes=[("Документы", "*.pdf *.docx *.txt"), ("PDF", "*.pdf"),
-                       ("Word", "*.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
+            filetypes=[("Документы", "*.pdf *.doc *.docx *.xlsx *.txt"), ("PDF", "*.pdf"),
+                       ("Word", "*.doc *.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
         if not paths:
             return
         for path in paths:
@@ -575,7 +575,7 @@ class UmbraApp(ctk.CTk):
                                 "Внимание: всегда проверяйте результат перед отправкой!")
             else:
                 self.set_status("Откройте документ в Word или нажмите «Выбрать файл» "
-                                "(поддерживаются .docx, .xlsx, .txt, .pdf).\n"
+                                "(поддерживаются .doc, .docx, .xlsx, .txt, .pdf).\n"
                                 "Внимание: всегда проверяйте результат перед отправкой!")
 
         self._render_cards()
@@ -688,7 +688,7 @@ class UmbraApp(ctk.CTk):
         for suffix in (' [ОТВЕТ]', ' [ANON]'):
             if suffix in base:
                 clean = base.replace(' [ОТВЕТ]', '').replace(' [ANON]', '')
-                for oext in ('.docx', '.xlsx', '.txt'):
+                for oext in ('.doc', '.docx', '.xlsx', '.txt'):
                     orig = find_by_name(clean + oext)
                     if orig:
                         return selected, orig
@@ -714,7 +714,7 @@ class UmbraApp(ctk.CTk):
             anon_path, orig_path = self._resolve_deanon_pair(target)
             if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target and len(targets) == 1:
                 from tkinter import filedialog
-                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.docx *.xlsx *.txt"), ("Все файлы", "*.*")])
+                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.doc *.docx *.xlsx *.txt"), ("Все файлы", "*.*")])
                 if picked:
                     anon_path, orig_path = picked, target
             if anon_path and orig_path:
