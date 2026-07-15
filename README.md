@@ -11,9 +11,10 @@
 
 ## 💻 Технологии
 * **Язык:** Python 3.14 (64-бит)
-* **Интерфейс:** `customtkinter`
+* **Интерфейс:** `customtkinter` (с поддержкой Drag-and-Drop через `windnd`)
 * **NLP (Обработка текста):** `navec` (эмбеддинги), `slovnet` (NER), `razdel` (проект Natasha)
-* **Работа с документами:** `python-docx`, `markdown-it-py`
+* **Работа с документами:** `python-docx`, `pypdf`, `openpyxl`, `markdown-it-py`
+* **Взаимодействие с ОС:** `pywin32`, `psutil` (поиск и детекция открытых файлов)
 * **Сборка:** `PyInstaller` (в один файл)
 
 ## 📁 Структура проекта
