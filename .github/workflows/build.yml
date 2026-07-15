@@ -163,19 +163,20 @@ jobs:
         with:
           name: Umbra-Linux
 
-      - name: Create ZIP archive
+      - name: Create Universal Archive
         run: |
-          mkdir Umbra-Windows
-          mv Umbra.exe Umbra-Windows/
-          zip -r Umbra-Windows.zip Umbra-Windows/
+          mkdir -p Umbra-Universal/Umbra-Windows
+          mv Umbra.exe Umbra-Universal/Umbra-Windows/
+          tar -xzf Umbra-macOS.tar.gz -C Umbra-Universal/
+          tar -xzf Umbra-Linux.tar.gz -C Umbra-Universal/
+          cd Umbra-Universal
+          zip -r ../Umbra.zip *
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
           body_path: release_notes.md
           files: |
-            Umbra-Windows.zip
-            Umbra-macOS.tar.gz
-            Umbra-Linux.tar.gz
+            Umbra.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
