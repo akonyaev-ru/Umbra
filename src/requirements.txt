@@ -14,11 +14,11 @@ slovnet==0.6.0
 razdel==0.5.0
 natasha==1.6.0
 psutil==7.2.2
-pywin32==312
+pywin32==312 ; sys_platform == 'win32'
 pillow==12.3.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
 pypdf==6.14.2
 openpyxl==3.1.5
 pyinstaller==6.21.0
-windnd==1.0.7
+windnd==1.0.7 ; sys_platform == 'win32'
