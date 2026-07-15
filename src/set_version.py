@@ -14,7 +14,7 @@ import re
 def main():
     tag = os.environ.get("UMBRA_VERSION", "").lstrip("vV").strip()
     if not tag:
-        print("UMBRA_VERSION не задан — version_info.txt без изменений")
+        print("UMBRA_VERSION not set - version_info.txt unchanged")
         return
 
     parts = re.findall(r"\d+", tag)[:4]
@@ -32,7 +32,7 @@ def main():
     text = re.sub(r"StringStruct\('ProductVersion', '[^']*'\)",
                   f"StringStruct('ProductVersion', '{dotted}')", text)
     open(path, "w", encoding="utf-8").write(text)
-    print(f"version_info.txt обновлён до версии {dotted}")
+    print(f"version_info.txt updated to version {dotted}")
 
 
 if __name__ == "__main__":
