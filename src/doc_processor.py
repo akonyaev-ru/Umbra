@@ -84,27 +84,53 @@ class DocumentProcessor:
         import win32com.client
         import tempfile
         import uuid
-        
+
         try:
             pythoncom.CoInitialize()
         except Exception:
             pass # Already initialized
-            
+
         word = None
+        wb = None
+        docx_path = None
         try:
-            word = win32com.client.Dispatch("Word.Application")
+            # DispatchEx — ОТДЕЛЬНЫЙ экземпляр Word, который принадлежит нам: не
+            # присоединяемся к сессии пользователя, не рискуем его несохранёнными
+            # правками и не «убиваем» его окно при выходе.
+            word = win32com.client.DispatchEx("Word.Application")
             word.Visible = False
-            wb = word.Documents.Open(os.path.abspath(doc_path))
+            try:
+                word.DisplayAlerts = 0  # wdAlertsNone — никаких модальных окон
+            except Exception:
+                pass
+            # ReadOnly=True — файл не блокируется и не подхватывается «грязная»
+            # копия; AddToRecentFiles=False — не засоряем список недавних.
+            wb = word.Documents.Open(os.path.abspath(doc_path),
+                                     ReadOnly=True, AddToRecentFiles=False,
+                                     ConfirmConversions=False)
             temp_dir = tempfile.gettempdir()
             docx_path = os.path.join(temp_dir, f"temp_{uuid.uuid4().hex}.docx")
             wb.SaveAs2(docx_path, FileFormat=16) # wdFormatXMLDocument
-            wb.Close()
             return docx_path
         except Exception as e:
+            # Частично созданный temp-файл не оставляем на диске.
+            if docx_path and os.path.exists(docx_path):
+                try:
+                    os.remove(docx_path)
+                except OSError:
+                    pass
             raise RuntimeError(f"Не удалось конвертировать .doc в .docx. Убедитесь, что установлен Microsoft Word: {e}")
         finally:
-            if word:
-                word.Quit()
+            if wb is not None:
+                try:
+                    wb.Close(SaveChanges=0)  # wdDoNotSaveChanges — без запроса
+                except Exception:
+                    pass
+            if word is not None:
+                try:
+                    word.Quit(SaveChanges=0)
+                except Exception:
+                    pass
 
     def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         """PDF → извлечённый текст → анонимизация → '[ANON].txt'. Скан без
@@ -219,9 +245,22 @@ class DocumentProcessor:
             is_anonymizing = True
         return is_anonymizing
 
+    @staticmethod
+    def _read_text(path):
+        """Читает текстовый файл терпимо к кодировке: UTF-8 (в т.ч. с BOM), а если
+        не вышло — cp1251 (типично, если документ сохранён в старом редакторе).
+        Падать на кодировке нельзя — иначе весь пакет обработки прерывается."""
+        raw = open(path, 'rb').read()
+        try:
+            return raw.decode('utf-8-sig')
+        except UnicodeDecodeError:
+            return raw.decode('cp1251', errors='replace')
+
+    def _read_text_lines(self, path):
+        return self._read_text(path).splitlines(keepends=True)
+
     def _process_txt(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
-        with open(in_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        lines = self._read_text_lines(in_path)
         mapper = PlaceholderMapper()
         out_lines = self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -314,6 +353,57 @@ class DocumentProcessor:
             if changed:
                 part._blob = serialize_part_xml(root)
 
+    @staticmethod
+    def _scrub_core_properties(doc):
+        """Чистит метаданные документа (docProps/core.xml): автор, кто изменял,
+        заголовок, тема и т.п. Там часто настоящие ФИО/e-mail, но в тело документа
+        они не входят, поэтому анонимайзер тела их не видит и они утекли бы в
+        [ANON].docx и в буфер обмена при отправке файла ИИ."""
+        try:
+            cp = doc.core_properties
+        except Exception:
+            return
+        for attr in ('author', 'last_modified_by', 'title', 'subject',
+                     'comments', 'category', 'keywords', 'content_status',
+                     'identifier'):
+            try:
+                if getattr(cp, attr, None):
+                    setattr(cp, attr, '')
+            except Exception:
+                pass
+
+    _COMMENT_RELTYPE = RT.COMMENTS
+
+    def _comment_parts(self, doc):
+        """XML-части рецензий (word/comments.xml). python-docx их не моделирует."""
+        for rel in doc.part.rels.values():
+            if rel.reltype == self._COMMENT_RELTYPE:
+                yield rel.target_part
+
+    def _anonymize_comment_parts(self, doc, hide_names, hide_locations, hide_orgs, hide_dates, mapper):
+        """Анонимизирует текст комментариев Word и стирает имя/инициалы автора.
+        Без этого рецензии («Согласовано с Ивановым, ИНН …») и ФИО рецензента
+        уходили в [ANON].docx нетронутыми — критическая утечка."""
+        for part in self._comment_parts(doc):
+            try:
+                root = parse_xml(part.blob)
+            except Exception:
+                continue
+            changed = False
+            for cmt in root.iter(qn('w:comment')):
+                for attr in ('w:author', 'w:initials'):
+                    if cmt.get(qn(attr)):
+                        cmt.set(qn(attr), '')
+                        changed = True
+            p_elems = root.findall('.//' + qn('w:p'))
+            extra = self._build_extra_from_texts([Paragraph(p, part).text for p in p_elems])
+            for p_el in p_elems:
+                if self._anonymize_paragraph(Paragraph(p_el, part), hide_names,
+                                             hide_locations, hide_orgs, hide_dates, extra, mapper):
+                    changed = True
+            if changed:
+                part._blob = serialize_part_xml(root)
+
     def _process_docx(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         doc = Document(in_path)
         # Тот же барьер, что и в md-контуре: поля (w:fldSimple), надписи
@@ -326,6 +416,8 @@ class DocumentProcessor:
             raise ValueError('Документ нужно подготовить: ' + '; '.join(issues) + '.')
         mapper = PlaceholderMapper()
         self._anonymize_doc(doc, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        self._anonymize_comment_parts(doc, hide_names, hide_locations, hide_orgs, hide_dates, mapper)
+        self._scrub_core_properties(doc)
         doc.save(out_path)
         return mapper
 
@@ -373,8 +465,16 @@ class DocumentProcessor:
 
     def _process_table(self, table, hide_names, hide_locations, hide_orgs, hide_dates,
                        smart_contract_mode, is_anonymizing, extra, mapper):
+        # Объединённые ячейки (gridSpan/vMerge) python-docx отдаёт одним и тем же
+        # объектом в нескольких позициях row.cells. Без дедупликации такая ячейка
+        # анонимизировалась бы дважды: второй проход прогонял бы NER уже по МЕТКАМ
+        # ([ФИО_1]) и портил их. Обрабатываем каждый физический <w:tc> один раз.
+        seen = set()
         for row in table.rows:
             for cell in row.cells:
+                if id(cell._tc) in seen:
+                    continue
+                seen.add(id(cell._tc))
                 for para in cell.paragraphs:
                     if smart_contract_mode:
                         is_anonymizing = self._smart_toggle(para.text, is_anonymizing)
@@ -436,7 +536,38 @@ class DocumentProcessor:
                 else:
                     new_text = ri['text'][:local_start] + ri['text'][local_stop:]
                 ri['text'] = new_text
-                ri['run'].text = new_text
+                self._set_run_text_preserving(ri['run'], new_text)
+
+    @staticmethod
+    def _set_run_text_preserving(run, new_text):
+        """Как `run.text = new_text`, но НЕ уничтожает не-текстовые элементы рана:
+        встроенные картинки/подписи (w:drawing/w:pict/w:object) и разрывы страниц
+        (w:br type=page/column). Штатный сеттер python-docx вызывает clear_content()
+        и стирает их вместе с текстом — терялись подпись-картинка и пагинация, причём
+        деанонимизация их уже не возвращала. Текст-только раны (99% случаев) идут
+        прежним быстрым путём."""
+        r = run._r
+        preserved = False
+        for child in r:
+            if child.tag in (qn('w:drawing'), qn('w:pict'), qn('w:object')):
+                preserved = True
+                break
+            if child.tag == qn('w:br') and child.get(qn('w:type')) in ('page', 'column'):
+                preserved = True
+                break
+        if not preserved:
+            run.text = new_text
+            return
+        # Есть сохраняемые элементы: правим только текстовые узлы w:t. Весь новый
+        # текст кладём в первый w:t (сохраняя его позицию относительно картинки),
+        # остальные w:t обнуляем.
+        t_elems = r.findall(qn('w:t'))
+        if not t_elems:
+            return
+        t_elems[0].text = new_text
+        t_elems[0].set('{http://www.w3.org/XML/1998/namespace}space', 'preserve')
+        for extra in t_elems[1:]:
+            extra.text = ''
 
     # ------------------------------------------------------------------ #
     #  Деанонимизация (восстановление)                                    #
@@ -467,14 +598,15 @@ class DocumentProcessor:
         if ext.lower() == '.txt':
             stats = self._deanon_txt(new_path, out_path, mapping, tol_re)
         elif ext.lower() == '.doc':
-            # If the source is .doc, the output should be .docx
+            # Ответ ИИ пришёл в .doc — конвертируем ИМЕННО ОТВЕТ (new_path), а не
+            # оригинал: восстанавливать метки надо в документе от ИИ. Выход — .docx.
             out_path = os.path.join(file_dir, f"{clean} [DEANON].docx")
-            temp_docx = self._convert_doc_to_docx(source_path)
+            temp_answer_docx = self._convert_doc_to_docx(new_path)
             try:
-                stats = self._deanon_docx(new_path, out_path, mapping, tol_re, temp_source_path=temp_docx)
+                stats = self._deanon_docx(temp_answer_docx, out_path, mapping, tol_re)
             finally:
-                if os.path.exists(temp_docx):
-                    os.remove(temp_docx)
+                if os.path.exists(temp_answer_docx):
+                    os.remove(temp_answer_docx)
         elif ext.lower() == '.docx':
             stats = self._deanon_docx(new_path, out_path, mapping, tol_re)
         elif ext.lower() == '.xlsx':
@@ -679,8 +811,7 @@ class DocumentProcessor:
                 if os.path.exists(temp_docx):
                     os.remove(temp_docx)
         elif ext == '.txt':
-            with open(source_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
+            lines = self._read_text_lines(source_path)
             self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext == '.pdf':
             import pdf_reader
@@ -696,9 +827,8 @@ class DocumentProcessor:
         [КАТЕГОРИЯ_N] для поиска в карте."""
         return '[' + match.group(1).upper() + '_' + match.group(2) + ']'
 
-    def _deanon_docx(self, in_path, out_path, mapping, tol_re, temp_source_path=None):
-        # Если temp_source_path передан (для .doc), используем его вместо in_path
-        doc = Document(temp_source_path if temp_source_path else in_path)
+    def _deanon_docx(self, in_path, out_path, mapping, tol_re):
+        doc = Document(in_path)
         restored, unresolved = 0, []
         if tol_re is not None:
             for para in self._iter_paragraphs(doc):
@@ -759,8 +889,7 @@ class DocumentProcessor:
         return text
 
     def _deanon_txt(self, in_path, out_path, mapping, tol_re):
-        with open(in_path, 'r', encoding='utf-8') as f:
-            text = f.read()
+        text = self._read_text(in_path)
         stats = {'restored': 0, 'unresolved': 0, 'samples': []}
         text = self._restore_text_multipass(text, mapping, tol_re, stats)
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -804,11 +933,20 @@ class DocumentProcessor:
         from html.parser import HTMLParser
         mapper = PlaceholderMapper()
 
+        # Атрибуты, в которых бывают ПДн: mailto/tel в href, автор в meta content,
+        # подписи в title/alt и т.п. Прочие (class, style, id, width…) не трогаем,
+        # чтобы не поломать вёрстку.
+        PII_ATTRS = {'href', 'src', 'title', 'alt', 'content', 'value',
+                     'placeholder', 'label', 'aria-label'}
+
         class HtmlAnonymizer(HTMLParser):
             def __init__(self, nlp):
                 super().__init__(convert_charrefs=False)
                 self.output = []
                 self.nlp = nlp
+
+            def _anon(self, s):
+                return self.nlp.anonymize_text(s, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper)
 
             def handle_starttag(self, tag, attrs):
                 attr_str = ""
@@ -816,6 +954,8 @@ class DocumentProcessor:
                     if val is None:
                         attr_str += f" {name}"
                     else:
+                        if name.lower() in PII_ATTRS:
+                            val = self._anon(val).replace('"', '&quot;')
                         attr_str += f' {name}="{val}"'
                 self.output.append(f"<{tag}{attr_str}>")
 
@@ -823,10 +963,11 @@ class DocumentProcessor:
                 self.output.append(f"</{tag}>")
 
             def handle_data(self, data):
-                self.output.append(self.nlp.anonymize_text(data, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper))
+                self.output.append(self._anon(data))
 
             def handle_comment(self, data):
-                self.output.append(f"<!--{data}-->")
+                # Комментарии Word/Outlook-экспорта нередко прячут ФИО/телефоны.
+                self.output.append(f"<!--{self._anon(data)}-->")
 
             def handle_decl(self, decl):
                 self.output.append(f"<!{decl}>")
@@ -863,14 +1004,47 @@ class DocumentProcessor:
     def _process_xlsx(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
         import openpyxl
         mapper = PlaceholderMapper()
+
+        def anon(s):
+            return self.nlp.anonymize_text(s, hide_names, hide_locations, hide_orgs,
+                                           hide_dates, mapper=mapper)
+
         wb = openpyxl.load_workbook(str(in_path))
         for ws in wb.worksheets:
             for row in ws.iter_rows():
                 for cell in row:
-                    if cell.value and isinstance(cell.value, str):
-                        cell.value = self.nlp.anonymize_text(cell.value, hide_names, hide_locations, hide_orgs, hide_dates, mapper=mapper)
+                    v = cell.value
+                    if isinstance(v, str):
+                        cell.value = anon(v)
+                    elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                        # Числовые ПДн (ИНН, телефон, счёт, ОГРН, СНИЛС) Excel хранит
+                        # как ЧИСЛО — прежний строковый гейт их пропускал. Скрываем
+                        # длинные числа (>=10 цифр — идентификаторы); короткие
+                        # (цены, количества, годы) не трогаем, чтобы не портить данные.
+                        s = str(v)
+                        if sum(ch.isdigit() for ch in s) >= 10:
+                            a = anon(s)
+                            if a != s:
+                                cell.value = a
+                    # Примечание к ячейке: текст и автор — тоже утечка.
+                    cmt = cell.comment
+                    if cmt is not None:
+                        if cmt.text:
+                            cmt.text = anon(cmt.text)
+                        if getattr(cmt, 'author', None):
+                            cmt.author = anon(cmt.author)
+            self._anonymize_xlsx_headers_footers(ws, anon)
         wb.save(str(out_path))
         return mapper
+
+    @staticmethod
+    def _anonymize_xlsx_headers_footers(ws, anon):
+        """Колонтитулы листа (печатные верх/низ) тоже несут ПДн — обезличиваем."""
+        for hf in (ws.oddHeader, ws.oddFooter, ws.evenHeader, ws.evenFooter,
+                   ws.firstHeader, ws.firstFooter):
+            for part in (hf.left, hf.center, hf.right):
+                if getattr(part, 'text', None):
+                    part.text = anon(part.text)
 
 
 class MdDeanonSession:

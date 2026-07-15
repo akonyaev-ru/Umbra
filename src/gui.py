@@ -561,14 +561,16 @@ class UmbraApp(ctk.CTk):
         seen = {f['path'] for f in detected}
         self.open_files_data = detected + [f for f in self.manual_files if f['path'] not in seen]
 
-        if self.open_files_data and not self.selected_file_path.get():
-            self.selected_file_path.set(self.open_files_data[0]['path'])
-        elif not self.open_files_data:
+        # Выбор — множественный (self.selected_files, набор путей). Если открытых
+        # файлов не осталось, сбрасываем выбор. Отдельного self.selected_file_path
+        # в этой модели нет: обращение к нему роняло refresh_files (AttributeError)
+        # и список карточек не отрисовывался вовсе.
+        if not self.open_files_data:
             self.selected_files.clear()
-
-        # Убедиться, что выбранный путь ещё существует в списке.
-        if False and  [f['path'] for f in self.open_files_data]:
-            self.selected_file_path.set(self.open_files_data[0]['path'] if self.open_files_data else "")
+        else:
+            # Оставляем в выборе только пути, которые ещё присутствуют в списке.
+            available = {f['path'] for f in self.open_files_data}
+            self.selected_files = {p for p in self.selected_files if p in available}
 
         # reset_status=False сохраняет сообщение о результате обработки,
         # чтобы оно не затиралось при автоматическом обновлении после успеха.
@@ -833,29 +835,43 @@ class UmbraApp(ctk.CTk):
     def _process_thread(self, file_paths, opts):
         total = len(file_paths)
         success_count = 0
+        errors = []                       # [(имя_файла, текст_ошибки)]
         try:
             for i, file_path in enumerate(file_paths):
                 self._ui(lambda idx=i: self.progress_bar.set(idx / total))
                 self._ui(lambda fname=os.path.basename(file_path): self.set_status(f"Обработка {fname}...", color=ACCENT_TEXT))
-                out_path = self.process_callback(file_path, **opts)
+                # Ошибка на ОДНОМ файле не должна прерывать весь пакет и терять
+                # отчёт об уже обработанных: ловим пофайлово, копим и продолжаем.
+                try:
+                    out_path = self.process_callback(file_path, **opts)
+                except Exception as e:
+                    errors.append((os.path.basename(file_path), str(e)))
+                    continue
                 if out_path:
                     self.last_out_paths.append(out_path)
                     self.last_out_path = out_path
                     success_count += 1
 
-            if success_count > 0:
-                def on_success():
-                    self.progress_bar.set(1.0)
-                    if success_count == 1:
+            def on_result():
+                self.progress_bar.set(1.0)
+                if success_count > 0:
+                    if success_count == 1 and not errors:
                         name = os.path.basename(self.last_out_path)
                         self.set_status(f"Готово: {name}\nНажмите «Скопировать для ИИ»...", color=SUCCESS_COLOR)
                     else:
-                        self.set_status(f"Успешно обработано файлов: {success_count} из {total}.", color=SUCCESS_COLOR)
+                        msg = f"Успешно обработано файлов: {success_count} из {total}."
+                        if errors:
+                            msg += "\nНе удалось: " + "; ".join(f"{n} — {e}" for n, e in errors[:3])
+                            if len(errors) > 3:
+                                msg += f" и ещё {len(errors) - 3}"
+                        self.set_status(msg, color=SUCCESS_COLOR)
                     self.btn_copy_ai.grid()
                     self.btn_open_folder.grid()
-                self._ui(on_success)
-            else:
-                self._ui(lambda: self.set_status("Не удалось обработать файлы.", color=ERROR_COLOR))
+                elif errors:
+                    self.set_status(f"Ошибка: {errors[0][1]}", color=ERROR_COLOR)
+                else:
+                    self.set_status("Не удалось обработать файлы.", color=ERROR_COLOR)
+            self._ui(on_result)
         except Exception as e:
             msg = str(e)
             self._ui(lambda: self.set_status(f"Ошибка: {msg}", color=ERROR_COLOR))

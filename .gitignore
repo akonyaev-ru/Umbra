@@ -15,3 +15,29 @@ venv.bak/
 .pytest_cache/
 
 dist/
+
+# --- Рабочие артефакты аудита/отладки: могут содержать РЕАЛЬНЫЕ ПДн ---
+# Ключи деанонимизации и дампы значений (второй рубеж защиты от утечки).
+over_anon_results.json
+audit_full.txt
+audit_results.json
+audit_results.txt
+audit_leaks.py
+audit_over_anonymization.py
+extract_anon_texts.py
+batch_anonymize.py
+unique_masked.txt
+all_anon_texts.txt
+runs.json
+jobs.json
+fetch.py
+
+# Сами обрабатываемые/результирующие документы не должны попадать в репозиторий.
+*.docx
+*.doc
+*.pdf
+*.xlsx
+*.csv
+*[ANON]*
+*[DEANON]*
+*[ОТВЕТ]*

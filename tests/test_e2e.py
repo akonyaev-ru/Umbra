@@ -51,7 +51,16 @@ def test_e2e_anonymize_deanonymize(tmp_path):
     
     assert '[ФИО_1]' in md_text
     assert '[ОРГАНИЗАЦИЯ_1]' in md_text
-    # Проверяем, что английское название и сумма без рублей поймались
+
+    # ГЛАВНАЯ проверка продукта: в файле, уходящем ИИ, НЕ должно остаться НИ ОДНОЙ
+    # исходной единицы ПДн. Раньше её не было — регрессия, при которой имя утекает
+    # в «обезличенный» md, проходила тест зелёной (см. аудит).
+    for leaked in ('Иванова Ивана Ивановича', 'Иванов Иван Иванович',
+                   'Microsoft Corporation', 'Рога и Копыта', '150 000,00'):
+        assert leaked not in md_text, f'ПДн утекли в [ANON].md: {leaked!r}'
+
+    # Английское название организации должно быть замаскировано (прежнее «ИЛИ»
+    # всегда удовлетворялось русской компанией и Microsoft не проверяло вовсе).
     assert '[ОРГАНИЗАЦИЯ_2]' in md_text or '[ОРГАНИЗАЦИЯ_3]' in md_text
     assert '[СУММА_1]' in md_text or '[СУММА_2]' in md_text
     
@@ -74,6 +83,96 @@ def test_e2e_anonymize_deanonymize(tmp_path):
     assert 'Microsoft Corporation' in full_text
     assert '150 000,00' in full_text
     assert '[ФИО_1]' not in full_text
+
+def test_detectors_hide_pii():
+    """Регрессия на детекторы, которые раньше пропускали ПДн (см. аудит)."""
+    os.chdir(str(src_dir))
+    nlp = NLPProcessor()
+    expected = {
+        'e-mail: ivanov@почта.рф': '[EMAIL]',            # кириллический домен (IDN)
+        'тел. (495) 123-45-67': '[ТЕЛЕФОН]',             # городской формат
+        'звоните 123-45-67': '[ТЕЛЕФОН]',                # без кода страны
+        'паспорт 4509 123456': '[ПАСПОРТ]',              # без слова «серия»
+        'Страховое свидетельство: 112-233-445 95': '[СНИЛС]',  # синоним СНИЛС
+        'Дата рождения: 15.06.1985': '[ДР]',             # обратный порядок
+    }
+    for text, tag in expected.items():
+        out = nlp.anonymize_text(text)
+        assert tag in out, f'{text!r} -> {out!r} (ждали {tag})'
+
+    # Даты НЕ должны дробиться в [СУММА].YYYY (over-anon).
+    dt = nlp.anonymize_text('Договор от 27.07.2006, срок до 31.12.2026.')
+    assert '27.07.2006' in dt and '31.12.2026' in dt and '[СУММА' not in dt
+
+    # «ГК РФ» — указание права, не адрес: должно сохраниться.
+    assert 'ГК РФ' in nlp.anonymize_text('Согласно ст. 431 ГК РФ.')
+
+
+def test_xlsx_numeric_and_comment(tmp_path):
+    """ИНН/телефон, сохранённые как ЧИСЛО, и текст примечания к ячейке — тоже ПДн."""
+    os.chdir(str(src_dir))
+    import openpyxl
+    from openpyxl.comments import Comment
+    nlp = NLPProcessor()
+    proc = DocumentProcessor(nlp)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws['A1'] = 7707083893                 # ИНН как число
+    ws['A2'] = 5                          # короткое число — не ПДн, не трогаем
+    ws['B1'].comment = Comment('Клиент Петров, ИНН 7707083893', 'Сидоров')
+    src = tmp_path / 'reestr.xlsx'
+    wb.save(str(src))
+
+    out = proc.process_file(str(src))
+    w = openpyxl.load_workbook(out).active
+    assert '7707083893' not in str(w['A1'].value)
+    assert w['A2'].value == 5
+    assert '7707083893' not in (w['B1'].comment.text or '')
+
+
+def test_underscore_label_merge_invariant(tmp_path):
+    """Метки с подчёркиванием ([ИНН_ЮЛ_1]) должны быть видны инварианту слияния:
+    если ИИ выкидывает клаузу с ИНН, значение берётся из оригинала, а не теряется."""
+    os.chdir(str(src_dir))
+    nlp = NLPProcessor()
+    proc = DocumentProcessor(nlp)
+    d = Document()
+    d.add_paragraph('Реквизиты: ИНН 7701234567, КПП 770101001.')
+    src = tmp_path / 'inn.docx'
+    d.save(str(src))
+
+    md_path = proc.process_file(str(src), export_md=True)
+    md_text = open(md_path, encoding='utf-8').read()
+    assert '[ИНН_ЮЛ_1]' in md_text
+
+    # Симулируем ответ ИИ, который ВЫКИНУЛ клаузу с ИНН.
+    ai = md_text.replace('ИНН [ИНН_ЮЛ_1], ', '')
+    ans = tmp_path / 'answer.md'
+    ans.write_text(ai, encoding='utf-8')
+
+    session = proc.deanonymize_file(str(ans), str(src))
+    session.save()
+    full = '\n'.join(p.text for p in Document(session.out_path).paragraphs)
+    assert '7701234567' in full, 'реальный ИНН потерян при деанонимизации'
+
+
+def test_docx_core_properties_scrubbed(tmp_path):
+    """Метаданные документа (автор/заголовок) не должны утекать в [ANON].docx."""
+    os.chdir(str(src_dir))
+    nlp = NLPProcessor()
+    proc = DocumentProcessor(nlp)
+    d = Document()
+    d.core_properties.author = 'Кознова Мария Петровна'
+    d.core_properties.title = 'Договор с ООО Ромашка'
+    d.add_paragraph('Стороны заключили договор.')
+    src = tmp_path / 'meta.docx'
+    d.save(str(src))
+
+    out = proc.process_file(str(src))
+    cp = Document(out).core_properties
+    assert not cp.author
+    assert not cp.title
+
 
 if __name__ == '__main__':
     # Запуск тестов

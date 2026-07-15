@@ -1,7 +1,11 @@
 name: Build Umbra
 
+# Наименьшие привилегии по умолчанию: сборочные джобы читают код и НЕ должны
+# иметь права записи в репозиторий. Право записи выдаётся точечно только джобу
+# release (ниже). Рекомендация по укреплению цепочки поставки: закрепить экшены
+# за конкретными commit SHA вместо плавающих тегов (@v4/@v5/@v2).
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -19,7 +23,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+        with:
+          persist-credentials: false   # не сохранять токен в .git/config
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -31,12 +37,24 @@ jobs:
           cd src
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest tests -q
+
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          cd src
+          UMBRA_VERSION="${{ github.ref_name }}" python set_version.py
+
       - name: Build with PyInstaller
         run: |
           cd src
           python build.py
-          
+
       - name: Archive build
         uses: actions/upload-artifact@v4
         with:
@@ -48,7 +66,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
+        with:
+          persist-credentials: false
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -60,17 +80,17 @@ jobs:
           cd src
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          
+
       - name: Build with PyInstaller
         run: |
           cd src
           python build.py
-          
+
       - name: Archive build
         run: |
           # Упаковываем .app бандл в tar.gz, чтобы сохранить права доступа
           tar -czf Umbra-macOS.tar.gz Umbra.app
-          
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -81,20 +101,23 @@ jobs:
     needs: [build, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # Право записи выдаётся ТОЛЬКО этому джобу — он публикует релиз.
+    permissions:
+      contents: write
     steps:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: Umbra-Build
-          
+
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
           name: Umbra-macOS
-          
+
       - name: Create ZIP archive
         run: zip Umbra-Release.zip Umbra.exe
-        
+
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
