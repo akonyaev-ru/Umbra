@@ -38,7 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Umbra-Build
-          path: Umbra/ # Папка, которую сгенерирует build.py с флагом --onedir
+          path: Umbra.exe # Теперь build.py генерирует один файл
 
   release:
     needs: build
@@ -49,14 +49,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: Umbra-Build
-          path: Umbra
           
       - name: Create ZIP archive
-        run: zip -r Umbra-Release.zip Umbra/
+        run: zip Umbra-Release.zip Umbra.exe
         
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
-          files: Umbra-Release.zip
+          files: |
+            Umbra.exe
+            Umbra-Release.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
