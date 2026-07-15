@@ -7,9 +7,8 @@
 """
 
 import os
+import sys
 import struct
-import win32clipboard
-
 
 def extract_text(path):
     """Текст результата для вставки в поле чата ИИ. .md/.txt — как есть;
@@ -39,17 +38,28 @@ def _hdrop_blob(paths):
     return header + files.encode('utf-16-le')
 
 
-def copy_result(path):
-    """Кладёт файл (CF_HDROP) и его текст (CF_UNICODETEXT) в буфер обмена.
+def copy_result(path, tk_master=None):
+    """На Windows кладёт файл (CF_HDROP) и его текст (CF_UNICODETEXT) в буфер обмена.
+    На Mac/Linux копирует только текст через tkinter (кроссплатформенный фоллбэк).
     Возвращает True при успехе. Исключения пробрасываются вызывающему."""
     text = extract_text(path)
-    blob = _hdrop_blob([path])
-    win32clipboard.OpenClipboard()
-    try:
-        win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, blob)
-        if text:
-            win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
-    finally:
-        win32clipboard.CloseClipboard()
-    return True
+    
+    if sys.platform == 'win32':
+        import win32clipboard
+        blob = _hdrop_blob([path])
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, blob)
+            if text:
+                win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    else:
+        # Cross-platform fallback for Mac/Linux: copy text only
+        if tk_master and text:
+            tk_master.clipboard_clear()
+            tk_master.clipboard_append(text)
+            tk_master.update()  # Required for tkinter clipboard to register
+        return True

@@ -618,9 +618,12 @@ class UmbraApp(ctk.CTk):
             return
         try:
             import clipboard_util
-            clipboard_util.copy_result(path)
+            clipboard_util.copy_result(path, self)
             # Короткое подтверждение текстом (не анимация — простая смена подписи).
-            self.btn_copy_ai.configure(text="Скопировано")
+            if sys.platform != 'win32':
+                self.btn_copy_ai.configure(text="Текст скопирован")
+            else:
+                self.btn_copy_ai.configure(text="Скопировано")
             self.after(1600, lambda: self.btn_copy_ai.configure(text=self._copy_ai_default))
         except Exception as e:
             self.set_status(f"Не удалось скопировать: {e}", color=ERROR_COLOR)
