@@ -536,7 +536,7 @@ class UmbraApp(ctk.CTk):
         from tkinter import filedialog
         paths = filedialog.askopenfilenames(
             title="Выберите документ",
-            filetypes=[("Документы", "*.pdf *.doc *.docx *.xlsx *.txt"), ("PDF", "*.pdf"),
+            filetypes=[("Документы", "*.pdf *.doc *.docx *.xlsx *.txt *.csv *.html"), ("PDF", "*.pdf"),
                        ("Word", "*.doc *.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
         if not paths:
             return
@@ -699,7 +699,7 @@ class UmbraApp(ctk.CTk):
         for suffix in (' [ОТВЕТ]', ' [ANON]'):
             if suffix in base:
                 clean = base.replace(' [ОТВЕТ]', '').replace(' [ANON]', '')
-                for oext in ('.doc', '.docx', '.xlsx', '.txt'):
+                for oext in ('.doc', '.docx', '.xlsx', '.txt', '.pdf', '.csv', '.html'):
                     orig = find_by_name(clean + oext)
                     if orig:
                         return selected, orig
@@ -725,7 +725,7 @@ class UmbraApp(ctk.CTk):
             anon_path, orig_path = self._resolve_deanon_pair(target)
             if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target and len(targets) == 1:
                 from tkinter import filedialog
-                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.doc *.docx *.xlsx *.txt"), ("Все файлы", "*.*")])
+                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.doc *.docx *.xlsx *.txt *.csv *.html"), ("Все файлы", "*.*")])
                 if picked:
                     anon_path, orig_path = picked, target
             if anon_path and orig_path:
