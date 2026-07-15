@@ -1,7 +1,13 @@
 import os
 import psutil
-import pythoncom
-import win32com.client
+import sys
+
+if sys.platform == 'win32':
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError:
+        pass
 
 def get_open_files():
     """
@@ -12,43 +18,44 @@ def get_open_files():
     seen_paths = set()
     
     # 1. Detect open Word documents
-    com_initialized = False
-    try:
-        # We must initialize COM in the current thread since this might be called
-        # from a GUI background thread. CoInitialize бросает com_error с кодом
-        # RPC_E_CHANGED_MODE, если поток уже инициализирован в другой модели —
-        # в этом случае COM всё равно годен к использованию, просто не деинициализируем.
+    if sys.platform == 'win32':
+        com_initialized = False
         try:
-            pythoncom.CoInitialize()
-            com_initialized = True
-        except Exception:
-            com_initialized = False
-
-        try:
-            word = win32com.client.GetActiveObject("Word.Application")
-            for doc in word.Documents:
-                # Отдельный try на документ: один файл в модальном/битом состоянии
-                # не должен прерывать перечисление остальных.
-                try:
-                    path = doc.FullName
-                except Exception:
-                    continue
-                if os.path.exists(path) and path.lower().endswith('.docx'):
-                    if path not in seen_paths:
-                        open_files.append({
-                            'name': os.path.basename(path),
-                            'path': path,
-                            'type': '.docx'
-                        })
-                        seen_paths.add(path)
-        except Exception:
-            pass # Word not running or no permissions
-    finally:
-        if com_initialized:
+            # We must initialize COM in the current thread since this might be called
+            # from a GUI background thread. CoInitialize бросает com_error с кодом
+            # RPC_E_CHANGED_MODE, если поток уже инициализирован в другой модели —
+            # в этом случае COM всё равно годен к использованию, просто не деинициализируем.
             try:
-                pythoncom.CoUninitialize()
+                pythoncom.CoInitialize()
+                com_initialized = True
             except Exception:
-                pass
+                com_initialized = False
+
+            try:
+                word = win32com.client.GetActiveObject("Word.Application")
+                for doc in word.Documents:
+                    # Отдельный try на документ: один файл в модальном/битом состоянии
+                    # не должен прерывать перечисление остальных.
+                    try:
+                        path = doc.FullName
+                    except Exception:
+                        continue
+                    if os.path.exists(path) and path.lower().endswith('.docx'):
+                        if path not in seen_paths:
+                            open_files.append({
+                                'name': os.path.basename(path),
+                                'path': path,
+                                'type': '.docx'
+                            })
+                            seen_paths.add(path)
+            except Exception:
+                pass # Word not running or no permissions
+        finally:
+            if com_initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
 
     # 2. Detect open Text files in Notepad and Notepad++
     try:

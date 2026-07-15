@@ -76,6 +76,10 @@ class DocumentProcessor:
         return out_path
 
     def _convert_doc_to_docx(self, doc_path):
+        import sys
+        if sys.platform != 'win32':
+            raise RuntimeError("Формат .doc поддерживается только на ОС Windows. Пожалуйста, сохраните файл как .docx.")
+
         import pythoncom
         import win32com.client
         import tempfile

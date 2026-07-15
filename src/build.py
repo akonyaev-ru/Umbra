@@ -7,6 +7,7 @@ def build():
     ctk_path = os.path.dirname(customtkinter.__file__)
     
     print("Packaging source code with PyInstaller...")
+    sep = os.pathsep
     cmd = [
         sys.executable,
         "-m",
@@ -15,11 +16,11 @@ def build():
         "--onefile",
         "--icon=icon_purple.ico",
         "--version-file=version_info.txt",
-        "--add-data=icon_purple.ico;.",
-        "--add-data=logo.png;.",
-        "--add-data=Audiowide-Regular.ttf;.",
-        f"--add-data={ctk_path};customtkinter/",
-        "--add-data=models;models/",
+        f"--add-data=icon_purple.ico{sep}.",
+        f"--add-data=logo.png{sep}.",
+        f"--add-data=Audiowide-Regular.ttf{sep}.",
+        f"--add-data={ctk_path}{sep}customtkinter/",
+        f"--add-data=models{sep}models/",
         "--copy-metadata=natasha",
         "--copy-metadata=slovnet",
         "--copy-metadata=navec",
@@ -29,12 +30,14 @@ def build():
         "--name=Umbra"
     ]
 
-    # Explicitly add all external dependencies that would normally be discovered
     external_modules = [
-        "customtkinter", "PIL", "psutil", "pythoncom", "win32com", "win32com.client",
-        "win32clipboard", "docx", "razdel", "navec", "slovnet", "markdown_it",
+        "customtkinter", "PIL", "psutil", "docx", "razdel", "navec", "slovnet", "markdown_it",
         "pypdf", "tkinter.messagebox", "tkinter.filedialog"
     ]
+    if sys.platform == 'win32':
+        external_modules.extend([
+            "pythoncom", "win32com", "win32com.client", "win32clipboard"
+        ])
     for mod in external_modules:
         cmd.append(f"--hidden-import={mod}")
 

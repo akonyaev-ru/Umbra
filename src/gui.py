@@ -6,7 +6,12 @@ import webbrowser
 import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image
-import windnd
+import sys
+if sys.platform == 'win32':
+    try:
+        import windnd
+    except ImportError:
+        pass
 
 try:
     import ctypes
@@ -381,11 +386,12 @@ class UmbraApp(ctk.CTk):
 
         self.is_processing = False
 
-        self.refresh_files()
-        try:
-            windnd.hook_drop(self, self._on_drop)
-        except Exception:
-            pass
+        # Windows Drag and Drop
+        if sys.platform == 'win32':
+            try:
+                windnd.hook_drop(self, self._on_drop)
+            except Exception:
+                pass
 
     def _on_drop(self, filenames):
         if self.is_processing: return
