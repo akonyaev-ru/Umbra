@@ -1,5 +1,8 @@
 name: Build Umbra
 
+permissions:
+  contents: write
+
 on:
   push:
     branches:
