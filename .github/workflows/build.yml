@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd src
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: |
@@ -77,7 +77,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd src
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: |
@@ -128,7 +128,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd src
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: |
