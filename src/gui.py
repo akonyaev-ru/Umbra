@@ -492,6 +492,14 @@ class UmbraApp(ctk.CTk):
             self.set_status("Добавлены первые 1000 файлов из папки.", color=WARNING_COLOR)
         elif rejected and not added:
             self.set_status(self._reject_reason(rejected), color=ERROR_COLOR)
+        elif added == 1 and not rejected and len(filenames) == 1:
+            # Умный Drag-and-Drop: проверяем, может ли это быть ответом ИИ
+            path = list(self.selected_files)[0]
+            anon_path, orig_path = self._resolve_deanon_pair(path)
+            if anon_path == path and orig_path:
+                # Нашли пару (смарт-матч с единственным паспортом)!
+                # Автозапуск деанонимизации
+                self.start_deanon()
 
     def _empty_state_text(self):
         """Пустой список — главный экран программы, он же инструкция.
@@ -499,10 +507,9 @@ class UmbraApp(ctk.CTk):
         единственный честный совет — кнопка выбора файла."""
         if self.dnd_enabled:
             return ("Перетащите документ сюда\n"
-                    "или нажмите «Выбрать файл».\n\n"
-                    ".docx, .xlsx, .txt, .pdf, .csv, .html")
-        return ("Нажмите «Выбрать файл».\n\n"
-                ".docx, .xlsx, .txt, .pdf, .csv, .html")
+                    "или нажмите «Выбрать файл».")
+        return "Нажмите «Выбрать файл»."
+
 
     @staticmethod
     def _reject_reason(rejected):
@@ -513,7 +520,7 @@ class UmbraApp(ctk.CTk):
                     "Сохраните документ в Word как .docx и перетащите снова.")
         listed = ', '.join(sorted(ext for ext in exts if ext)) or 'без расширения'
         return (f"Не подходит: {listed}.\n"
-                "Перетащите .docx, .xlsx, .txt, .pdf, .csv или .html.")
+                "Пожалуйста, используйте поддерживаемый формат документа.")
 
     def _apply_crisp_icon(self, window=None):
         """Ставит чёткую иконку окна и панели задач Windows-нативно.
@@ -639,8 +646,7 @@ class UmbraApp(ctk.CTk):
         from tkinter import filedialog
         paths = filedialog.askopenfilenames(
             title="Выберите документ",
-            filetypes=[("Документы", "*.pdf *.docx *.xlsx *.txt *.csv *.html"), ("PDF", "*.pdf"),
-                       ("Word", "*.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
+            filetypes=[("Документы", "*.pdf *.docx *.xlsx *.txt *.csv *.html"), ("Все файлы", "*.*")])
         if not paths:
             return
         for path in paths:
@@ -862,6 +868,15 @@ class UmbraApp(ctk.CTk):
             return explicit_answers[0], selected
         if not explicit_answers and len(candidates) == 1:
             return candidates[0], selected
+
+        if not matching:
+            # Умный Drag-and-Drop: если выбран неизвестный файл, а паспорт всего один,
+            # мы предполагаем, что этот файл — ответ от ИИ для этого единственного паспорта.
+            if len(records) == 1:
+                orig = find_by_name(records[0]['original_name'])
+                if orig:
+                    return selected, orig
+
         return None, None
 
     def start_deanon(self):

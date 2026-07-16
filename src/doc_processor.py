@@ -70,7 +70,6 @@ class DocumentProcessor:
         # .docx из извлечённых текста и таблиц, поэтому ничего активного
         # (ссылки, вложения, JS-действия PDF) через границу не переезжает.
         out_ext = '.md' if export_md and ext == '.docx' else (
-            '.docx' if ext == '.pdf' else
             '.txt' if ext in {'.csv', '.html'} else ext
         )
         out_path = unique_output_path(
@@ -156,11 +155,29 @@ class DocumentProcessor:
         return out
 
     def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
-        """PDF → абзацы и таблицы → анонимизация → '[ANON] <имя>.docx'."""
+        """PDF → абзацы и таблицы → анонимизация → '[ANON] <имя>.pdf' (физическая закраска)."""
         mapper = PlaceholderMapper()
         blocks = self._anonymize_pdf(in_path, mapper, hide_names, hide_locations,
                                      hide_orgs, hide_dates, smart_contract_mode)
-        self._write_pdf_docx(blocks, out_path)
+        try:
+            import fitz
+        except ImportError:
+            raise RuntimeError("Библиотека PyMuPDF (fitz) не установлена. Выполните 'pip install PyMuPDF' для поддержки закраски PDF.")
+            
+        self._write_redacted_pdf(in_path, out_path, mapper)
+        return mapper
+
+    @staticmethod
+    def _write_redacted_pdf(in_path, out_path, mapper):
+        import fitz
+        doc = fitz.open(in_path)
+        for page in doc:
+            for entity_text in mapper.mapping.values():
+                for inst in page.search_for(entity_text, quads=True):
+                    page.add_redact_annot(inst, fill=(0, 0, 0))
+            page.apply_redactions()
+        doc.save(out_path)
+        doc.close()
         return mapper
 
     @staticmethod

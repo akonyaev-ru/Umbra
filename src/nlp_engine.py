@@ -189,32 +189,51 @@ class PlaceholderMapper:
         return ph
 
 
+class TransformerSpan:
+    def __init__(self, start, stop, type_):
+        self.start = start
+        self.stop = stop
+        self.type = type_
+
+class TransformerMarkup:
+    def __init__(self, spans):
+        self.spans = spans
+
 class NLPProcessor:
     def __init__(self):
-        navec_path = get_resource_path(os.path.join("models", "navec_news_v1_1B_250K_300d_100q.tar"))
-        slovnet_path = get_resource_path(os.path.join("models", "slovnet_ner_news_v1.tar"))
-        
-        if not os.path.exists(navec_path) or not os.path.exists(slovnet_path):
-            raise FileNotFoundError(f"Models not found. Checked: {navec_path}, {slovnet_path}")
-
-        self.navec = Navec.load(navec_path)
-        self.ner = NER.load(slovnet_path)
-        self.ner.navec(self.navec)
-
-        # Кеш NER-разметки по тексту абзаца. Документ обходится дважды (сбор имён
-        # + анонимизация), и NER — самая дорогая операция. NER детерминирован
-        # (один текст → одна разметка), поэтому мемоизация НЕ меняет результат, а
-        # лишь убирает повторный прогон одного и того же абзаца во втором проходе.
-        # Живёт в пределах обработки одного документа (clear_ner_cache).
-        self._ner_cache = {}
-
         self._compile_regexes()
+        self._ner_cache = {}
+        
+        try:
+            from transformers import pipeline
+            self.hf_ner = pipeline("ner", model="Babelscape/wikineural-multilingual-ner", aggregation_strategy="simple")
+            self.use_hf = True
+        except ImportError:
+            self.use_hf = False
+            navec_path = get_resource_path(os.path.join("models", "navec_news_v1_1B_250K_300d_100q.tar"))
+            slovnet_path = get_resource_path(os.path.join("models", "slovnet_ner_news_v1.tar"))
+            
+            if not os.path.exists(navec_path) or not os.path.exists(slovnet_path):
+                raise FileNotFoundError(f"Models not found. Checked: {navec_path}, {slovnet_path}")
+
+            self.navec = Navec.load(navec_path)
+            self.ner = NER.load(slovnet_path)
+            self.ner.navec(self.navec)
 
     def _ner_markup(self, text):
         """NER-разметка текста с мемоизацией (см. self._ner_cache)."""
         markup = self._ner_cache.get(text)
         if markup is None:
-            markup = self.ner(text)
+            if getattr(self, 'use_hf', False):
+                hf_result = self.hf_ner(text)
+                spans = []
+                for ent in hf_result:
+                    group = ent['entity_group']
+                    if group in ('PER', 'ORG', 'LOC'):
+                        spans.append(TransformerSpan(ent['start'], ent['end'], group))
+                markup = TransformerMarkup(spans)
+            else:
+                markup = self.ner(text)
             self._ner_cache[text] = markup
         return markup
 
