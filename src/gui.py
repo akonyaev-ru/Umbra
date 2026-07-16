@@ -583,7 +583,7 @@ class UmbraApp(ctk.CTk):
                                 "Обязательно проверяйте результат перед отправкой.")
             else:
                 self.set_status("Откройте документ в Word или нажмите «Выбрать файл» "
-                                "(поддерживаются .doc, .docx, .xlsx, .txt, .pdf).\n"
+                                "(поддерживаются .doc, .docx, .xlsx, .txt, .pdf, .csv, .html).\n"
                                 "Обязательно проверяйте результат перед отправкой.")
 
         self._render_cards()
@@ -618,7 +618,13 @@ class UmbraApp(ctk.CTk):
             return
         try:
             import clipboard_util
-            clipboard_util.copy_result(path, self)
+            # copy_result возвращает False, если в буфер положить было нечего:
+            # сообщаем честно, а не показываем «Скопировано» над пустым буфером.
+            if not clipboard_util.copy_result(path, self):
+                self.set_status("Не удалось скопировать текст этого формата.\n"
+                                "Нажмите «Открыть папку» и приложите файл к чату вручную.",
+                                color=ERROR_COLOR)
+                return
             # Короткое подтверждение текстом (не анимация — простая смена подписи).
             if sys.platform != 'win32':
                 self.btn_copy_ai.configure(text="Текст скопирован")

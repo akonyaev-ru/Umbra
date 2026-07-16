@@ -4,6 +4,11 @@ __pycache__/
 build/
 *.spec
 *.exe
+# Артефакты сборки в КОРНЕ репозитория (build.py собирает с --distpath=..):
+# Linux даёт бинарник без расширения «Umbra», macOS — бандл «Umbra.app».
+# Без этих правил разработчик на Linux/Mac закоммитил бы ~70 МБ бинарника.
+/Umbra
+/Umbra.app/
 .env
 .venv
 env/

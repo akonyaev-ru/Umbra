@@ -817,8 +817,26 @@ class DocumentProcessor:
             import pdf_reader
             lines = [l + '\n' for l in pdf_reader.extract_lines(source_path)]
             self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+        elif ext in ('.xlsx', '.csv', '.html'):
+            # Эти форматы обезличиваются функциями, которые СРАЗУ пишут файл, а нам
+            # нужна только карта. Пишем во временный файл и удаляем его: карта
+            # детерминирована, поэтому совпадает с той, что была при анонимизации.
+            # Без этой ветки GUI находил оригинал .xlsx/.csv/.html, а восстановление
+            # падало с «Источник восстановления: …» — формат был односторонним.
+            import tempfile
+            handlers = {'.xlsx': self._process_xlsx, '.csv': self._process_csv,
+                        '.html': self._process_html}
+            fd, tmp_out = tempfile.mkstemp(suffix=ext)
+            os.close(fd)
+            try:
+                mapper = handlers[ext](source_path, tmp_out, hide_names, hide_locations,
+                                       hide_orgs, hide_dates, smart_contract_mode)
+            finally:
+                if os.path.exists(tmp_out):
+                    os.remove(tmp_out)
         else:
-            raise ValueError("Источник восстановления: .json (ключ) или .docx/.txt/.pdf (оригинал).")
+            raise ValueError("Источник восстановления: .json (ключ) или "
+                             ".docx/.doc/.txt/.pdf/.xlsx/.csv/.html (оригинал).")
         return mapper.mapping
 
     @staticmethod

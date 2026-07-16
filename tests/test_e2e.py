@@ -174,6 +174,70 @@ def test_docx_core_properties_scrubbed(tmp_path):
     assert not cp.title
 
 
+def test_roundtrip_csv_html_xlsx(tmp_path):
+    """Форматы .csv/.html/.xlsx должны не только обезличиваться, но и
+    ВОССТАНАВЛИВАТЬСЯ: раньше _load_mapping их не умел и деанонимизация падала."""
+    os.chdir(str(src_dir))
+    nlp = NLPProcessor()
+    proc = DocumentProcessor(nlp)
+
+    csv_src = tmp_path / 'd.csv'
+    csv_src.write_text('Клиент,Телефон\nИванов Иван Иванович,+7 (495) 123-45-67\n',
+                       encoding='utf-8')
+    out, stats = proc.deanonymize_file(proc.process_file(str(csv_src)), str(csv_src))
+    assert 'Иванов Иван Иванович' in open(out, encoding='utf-8').read()
+    assert stats['restored'] > 0
+
+    html_src = tmp_path / 'd.html'
+    html_src.write_text('<p>Директор Петров Пётр Петрович</p>'
+                        '<a href="mailto:p@corp.ru">x</a>', encoding='utf-8')
+    out, stats = proc.deanonymize_file(proc.process_file(str(html_src)), str(html_src))
+    restored = open(out, encoding='utf-8').read()
+    assert 'Петров Пётр Петрович' in restored and 'p@corp.ru' in restored
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active['A1'] = 'Сидоров Сидор Сидорович'
+    xlsx_src = tmp_path / 'd.xlsx'
+    wb.save(str(xlsx_src))
+    out, stats = proc.deanonymize_file(proc.process_file(str(xlsx_src)), str(xlsx_src))
+    assert openpyxl.load_workbook(out).active['A1'].value == 'Сидоров Сидор Сидорович'
+
+
+def test_clipboard_extract_text_covers_output_formats(tmp_path):
+    """extract_text должен давать текст для ВСЕХ форматов результата — иначе на
+    Mac/Linux копировать нечего."""
+    os.chdir(str(src_dir))
+    import clipboard_util
+
+    csv_p = tmp_path / 'a.csv'
+    csv_p.write_text('Имя,Телефон\n[ФИО_1],[ТЕЛЕФОН_1]\n', encoding='utf-8')
+    assert '[ФИО_1]' in clipboard_util.extract_text(str(csv_p))
+
+    html_p = tmp_path / 'a.html'
+    html_p.write_text('<p>[ФИО_1]</p>', encoding='utf-8')
+    assert '[ФИО_1]' in clipboard_util.extract_text(str(html_p))
+
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active['A1'] = '[ФИО_1]'
+    xlsx_p = tmp_path / 'a.xlsx'
+    wb.save(str(xlsx_p))
+    assert '[ФИО_1]' in clipboard_util.extract_text(str(xlsx_p))
+
+
+def test_copy_result_does_not_fake_success(tmp_path, monkeypatch):
+    """На Mac/Linux, когда копировать нечего, copy_result обязан вернуть False:
+    раньше он возвращал True, и GUI показывал «Скопировано» над пустым буфером."""
+    os.chdir(str(src_dir))
+    import clipboard_util
+    monkeypatch.setattr(clipboard_util.sys, 'platform', 'linux')
+
+    unknown = tmp_path / 'result.bin'   # формат без извлекаемого текста
+    unknown.write_bytes(b'binary')
+    assert clipboard_util.copy_result(str(unknown), tk_master=None) is False
+
+
 if __name__ == '__main__':
     # Запуск тестов
     import pytest

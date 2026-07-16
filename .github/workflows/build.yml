@@ -112,14 +112,21 @@ jobs:
           python-version: '3.14'
           cache: 'pip'
 
+      - name: Install Tcl/Tk runtime
+        run: |
+          sudo apt-get update
+          # ВАЖНО: сборка идёт интерпретатором от actions/setup-python, а python3-tk
+          # кладёт модуль tkinter для СИСТЕМНОГО python3 и на сборку прямо не влияет —
+          # он лишь ПОБОЧНО подтягивал libtcl/libtk, на которые линкуется _tkinter из
+          # setup-python. Ставим эти библиотеки явно, чтобы сборка не держалась на
+          # случайности; python3-tk оставлен как проверенный запасной вариант.
+          sudo apt-get install -y tk-dev libtcl8.6 libtk8.6 python3-tk
+
       - name: Install dependencies
         run: |
           cd src
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # Устанавливаем системные библиотеки, необходимые для Tkinter/CustomTkinter на Linux
-          sudo apt-get update
-          sudo apt-get install -y python3-tk
 
       - name: Build with PyInstaller
         run: |
@@ -146,13 +153,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # checkout нужен только ради release_notes.md (body_path).
       - uses: actions/checkout@v4
-
-      - name: Cleanup old release (if any)
-        run: |
-          gh release delete ${{ github.ref_name }} -y || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          persist-credentials: false
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
@@ -171,18 +175,30 @@ jobs:
 
       - name: Prepare OS-specific Archives
         run: |
+          # Флаг -y обязателен: без него zip ИДЁТ ПО симлинкам и сохраняет их как
+          # обычные файлы, ломая структуру .app-бандла macOS. Права доступа
+          # (в т.ч. бит исполнения) zip хранит в атрибутах — их unzip восстановит.
           # Windows
           mkdir -p Umbra-Windows
           mv Umbra.exe Umbra-Windows/
-          zip -r Umbra-Windows.zip Umbra-Windows/
-          
+          zip -r -y Umbra-Windows.zip Umbra-Windows/
+
           # macOS
           tar -xzf Umbra-macOS.tar.gz
-          zip -r Umbra-macOS.zip Umbra-macOS/
-          
+          zip -r -y Umbra-macOS.zip Umbra-macOS/
+
           # Linux
           tar -xzf Umbra-Linux.tar.gz
-          zip -r Umbra-Linux.zip Umbra-Linux/
+          zip -r -y Umbra-Linux.zip Umbra-Linux/
+
+      # Удаляем старый релиз ТОЛЬКО когда архивы уже собраны и готовы к публикации.
+      # Раньше этот шаг стоял первым: если падал любой шаг ниже, релиз был уже
+      # удалён, а новый не создан — пользователи оставались вообще без релиза.
+      - name: Cleanup old release (if any)
+        run: |
+          gh release delete ${{ github.ref_name }} -y || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
