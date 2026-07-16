@@ -9,12 +9,65 @@ import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image
 import naming
-windnd = None
-if sys.platform == 'win32':
-    try:
-        import windnd
-    except ImportError:
-        windnd = None
+def safe_hook_dropfiles(tkwindow, drop_func):
+    if sys.platform != 'win32':
+        return
+    import ctypes
+    from ctypes import wintypes
+    
+    hwnd = tkwindow.winfo_id()
+    is_64bit = sys.maxsize > 2**32
+    
+    GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW if is_64bit else ctypes.windll.user32.GetWindowLongW
+    SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW if is_64bit else ctypes.windll.user32.SetWindowLongW
+    
+    GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
+    GetWindowLong.restype = ctypes.c_void_p
+    
+    SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+    SetWindowLong.restype = ctypes.c_void_p
+    
+    CallWindowProc = ctypes.windll.user32.CallWindowProcW
+    CallWindowProc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    CallWindowProc.restype = ctypes.c_void_p
+    
+    WM_DROPFILES = 0x0233
+    GWLP_WNDPROC = -4
+    
+    DragQueryFile = ctypes.windll.shell32.DragQueryFileW
+    DragQueryFile.argtypes = [wintypes.HDROP, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+    DragQueryFile.restype = wintypes.UINT
+    
+    DragFinish = ctypes.windll.shell32.DragFinish
+    DragFinish.argtypes = [wintypes.HDROP]
+    DragFinish.restype = None
+    
+    DragAcceptFiles = ctypes.windll.shell32.DragAcceptFiles
+    DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
+    DragAcceptFiles.restype = None
+    
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    
+    old_wndproc = GetWindowLong(hwnd, GWLP_WNDPROC)
+    
+    def py_wndproc(h, msg, wp, lp):
+        if msg == WM_DROPFILES:
+            hdrop = wintypes.HDROP(wp)
+            count = DragQueryFile(hdrop, 0xFFFFFFFF, None, 0)
+            files = []
+            for i in range(count):
+                length = DragQueryFile(hdrop, i, None, 0)
+                buf = ctypes.create_unicode_buffer(length + 1)
+                DragQueryFile(hdrop, i, buf, length + 1)
+                files.append(buf.value)
+            DragFinish(hdrop)
+            drop_func(files)
+            return 0
+        return CallWindowProc(old_wndproc, h, msg, wp, lp)
+    
+    tkwindow._drop_wndproc = WNDPROC(py_wndproc)
+    DragAcceptFiles(hwnd, True)
+    SetWindowLong(hwnd, GWLP_WNDPROC, ctypes.cast(tkwindow._drop_wndproc, ctypes.c_void_p))
 
 try:
     import ctypes
@@ -378,13 +431,12 @@ class UmbraApp(ctk.CTk):
         self.is_processing = False
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        # Drag-and-drop (Windows). windnd экспортирует ТОЛЬКО hook_dropfiles:
-        # прежний hook_drop бросал AttributeError прямо в пустой except, из-за
-        # чего перетаскивание не работало ни разу. force_unicode=True обязателен —
-        # иначе windnd отдаёт путь байтами в mbcs, и кириллица в нём рвётся.
-        if sys.platform == 'win32' and windnd is not None:
+        # Drag-and-drop (Windows). Мы используем безопасную 64-битную реализацию
+        # на ctypes (safe_hook_dropfiles) вместо windnd, который ломает приложение
+        # на 64-битных системах из-за усечения указателей окна.
+        if sys.platform == 'win32':
             try:
-                windnd.hook_dropfiles(self, func=self._on_drop, force_unicode=True)
+                safe_hook_dropfiles(self, self._on_drop)
                 self.dnd_enabled = True
             except Exception as exc:
                 print(f"Drag-and-drop недоступен: {exc}", file=sys.stderr)
@@ -415,8 +467,7 @@ class UmbraApp(ctk.CTk):
             self.selected_files.add(path)
 
         for raw in filenames:
-            path = raw.decode("mbcs") if isinstance(raw, bytes) else raw
-            path = os.path.abspath(path)
+            path = os.path.abspath(raw)
             if os.path.isdir(path):
                 for root, dirs, files in os.walk(path, followlinks=False):
                     dirs[:] = [name for name in dirs

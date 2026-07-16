@@ -37,7 +37,7 @@ def build():
     ]
     if sys.platform == 'win32':
         external_modules.extend([
-            "win32clipboard", "windnd"
+            "win32clipboard"
         ])
     for mod in external_modules:
         cmd.append(f"--hidden-import={mod}")
