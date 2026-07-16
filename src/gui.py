@@ -3,6 +3,8 @@ import sys
 import threading
 import subprocess
 import webbrowser
+import json
+from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image
@@ -76,6 +78,8 @@ HOVER_COLOR = ("#F2EFF9", "#292434")       # ховер карточки
 SELECTED_BG = ("#E6DDF2", "#31254A")       # выбранная карточка
 SUCCESS_COLOR = ("#513A7E", "#9A81D2")
 ERROR_COLOR = ("#DC2626", "#F87171")
+WARNING_COLOR = ("#B45309", "#FBBF24")
+SUPPORTED_EXTENSIONS = ('.docx', '.xlsx', '.txt', '.pdf', '.csv', '.html')
 TEXT_COLOR = ("#0F172A", "#F1F5F9")        # основной текст
 MUTED_COLOR = ("#64748B", "#94A3B8")       # приглушённый текст
 PROCESSING_BTN = ("#C4B6DF", "#453466")    # видимая кнопка во время обработки
@@ -200,7 +204,7 @@ class UmbraApp(ctk.CTk):
         self.header_switch_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         self.header_switch_frame.grid(row=0, column=2, rowspan=2, sticky="e")
 
-        self.md_mode = ctk.BooleanVar(value=False)
+        self.md_mode = ctk.BooleanVar(value=True)
         self.md_switch = ctk.CTkSwitch(
             self.header_switch_frame,
             text="",
@@ -385,6 +389,7 @@ class UmbraApp(ctk.CTk):
         )
 
         self.is_processing = False
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Windows Drag and Drop
         if sys.platform == 'win32':
@@ -395,20 +400,32 @@ class UmbraApp(ctk.CTk):
 
     def _on_drop(self, filenames):
         if self.is_processing: return
+        existing = {f["path"] for f in self.manual_files}
+        added = 0
         for raw in filenames:
             path = raw.decode("mbcs") if isinstance(raw, bytes) else raw
             path = os.path.abspath(path)
             if os.path.isdir(path):
-                for root, _, files in os.walk(path):
+                for root, dirs, files in os.walk(path, followlinks=False):
+                    dirs[:] = [name for name in dirs
+                               if not os.path.islink(os.path.join(root, name))]
                     for file in files:
-                        if file.lower().endswith((".doc", ".docx", ".xlsx", ".txt", ".pdf")):
+                        if file.lower().endswith(SUPPORTED_EXTENSIONS):
                             fpath = os.path.join(root, file)
-                            if fpath not in [f["path"] for f in self.manual_files]:
+                            if fpath not in existing:
                                 self.manual_files.append({"name": os.path.basename(fpath), "path": fpath, "type": os.path.splitext(fpath)[1].lower()})
+                                existing.add(fpath)
+                                added += 1
                             self.selected_files.add(fpath)
-            elif path.lower().endswith((".doc", ".docx", ".xlsx", ".txt", ".pdf")):
-                if path not in [f["path"] for f in self.manual_files]:
+                            if added >= 1_000:
+                                self.set_status("Добавлены первые 1000 файлов из папки.", color=WARNING_COLOR)
+                                break
+                    if added >= 1_000:
+                        break
+            elif path.lower().endswith(SUPPORTED_EXTENSIONS):
+                if path not in existing:
                     self.manual_files.append({"name": os.path.basename(path), "path": path, "type": os.path.splitext(path)[1].lower()})
+                    existing.add(path)
                 self.selected_files.add(path)
         self.refresh_files(reset_status=False)
 
@@ -536,8 +553,8 @@ class UmbraApp(ctk.CTk):
         from tkinter import filedialog
         paths = filedialog.askopenfilenames(
             title="Выберите документ",
-            filetypes=[("Документы", "*.pdf *.doc *.docx *.xlsx *.txt *.csv *.html"), ("PDF", "*.pdf"),
-                       ("Word", "*.doc *.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
+            filetypes=[("Документы", "*.pdf *.docx *.xlsx *.txt *.csv *.html"), ("PDF", "*.pdf"),
+                       ("Word", "*.docx"), ("Excel", "*.xlsx"), ("Текст", "*.txt"), ("Все файлы", "*.*")])
         if not paths:
             return
         for path in paths:
@@ -583,7 +600,7 @@ class UmbraApp(ctk.CTk):
                                 "Обязательно проверяйте результат перед отправкой.")
             else:
                 self.set_status("Откройте документ в Word или нажмите «Выбрать файл» "
-                                "(поддерживаются .doc, .docx, .xlsx, .txt, .pdf, .csv, .html).\n"
+                                "(поддерживаются .docx, .xlsx, .txt, .pdf, .csv, .html).\n"
                                 "Обязательно проверяйте результат перед отправкой.")
 
         self._render_cards()
@@ -601,13 +618,15 @@ class UmbraApp(ctk.CTk):
             self.set_status("Файл результата не найден.", color=ERROR_COLOR)
             return
         try:
-            # Открыть проводник и выделить готовый файл.
-            subprocess.Popen(['explorer', '/select,', os.path.normpath(path)])
+            if sys.platform == 'win32':
+                subprocess.Popen(['explorer', '/select,', os.path.normpath(path)])
+            elif sys.platform == 'darwin':
+                subprocess.Popen(['open', '-R', path])
+            else:
+                subprocess.Popen(['xdg-open', os.path.dirname(path)])
         except Exception:
-            try:
+            if sys.platform == 'win32':
                 os.startfile(os.path.dirname(path))
-            except Exception:
-                pass
 
     def copy_for_ai(self):
         """Кладёт обезличенный файл И его текст в буфер обмена: вставить в поле
@@ -678,8 +697,13 @@ class UmbraApp(ctk.CTk):
         widget.bind('<Button-3>', popup)
 
     def on_closing(self):
+        if self.is_processing:
+            messagebox.showinfo(
+                "Обработка не завершена",
+                "Дождитесь завершения обработки. Готовые файлы публикуются только целиком."
+            )
+            return
         self.destroy()
-        sys.exit(0)
 
     # ---------------- Деанонимизация (восстановление данных) ---------------- #
     def _resolve_deanon_pair(self, selected):
@@ -690,7 +714,7 @@ class UmbraApp(ctk.CTk):
         '<имя> [ANON].<ext>' (классический docx/txt-контур). Оригинал — рядом
         на диске и среди открытых. Возвращает (anon_path, orig_path) или (None, None)."""
         folder, fname = os.path.split(selected)
-        base, ext = os.path.splitext(fname)
+        base, _ext = os.path.splitext(fname)
         open_paths = [f['path'] for f in self.open_files_data]
 
         def find_by_name(target_name):
@@ -702,19 +726,52 @@ class UmbraApp(ctk.CTk):
                     return op
             return None
 
-        for suffix in (' [ОТВЕТ]', ' [ANON]'):
-            if suffix in base:
-                clean = base.replace(' [ОТВЕТ]', '').replace(' [ANON]', '')
-                for oext in ('.doc', '.docx', '.xlsx', '.txt', '.pdf', '.csv', '.html'):
-                    orig = find_by_name(clean + oext)
-                    if orig:
-                        return selected, orig
-                return None, None
-        # Выбрали оригинал — ищем ответ ИИ / [ANON]-версию.
-        for cand in (base + ' [ОТВЕТ].md', base + ' [ANON].md', base + ' [ANON]' + ext):
-            anon = find_by_name(cand)
-            if anon:
-                return anon, selected
+        def manifests():
+            result = []
+            for path in Path(folder).glob('*.umbra.json'):
+                if ' [ANON]' not in path.name:
+                    continue
+                try:
+                    if path.stat().st_size > 1024 * 1024:
+                        continue
+                    with open(path, encoding='utf-8') as stream:
+                        data = json.load(stream)
+                    if data.get('schema') == 1 and isinstance(data.get('original_name'), str):
+                        result.append(data)
+                except (OSError, UnicodeError, json.JSONDecodeError, AttributeError):
+                    continue
+            return result
+
+        records = manifests()
+        if ' [ОТВЕТ]' in base or ' [ANON]' in base:
+            clean = base.replace(' [ОТВЕТ]', '').replace(' [ANON]', '')
+            names = {record['original_name'] for record in records
+                     if Path(record.get('output_name', '')).stem.replace(' [ANON]', '') == clean}
+            if len(names) == 1:
+                orig = find_by_name(names.pop())
+                if orig:
+                    return selected, orig
+            return None, None
+
+        # Выбран оригинал: паспорт даёт точное имя результата и исключает
+        # неоднозначный выбор «первого попавшегося расширения».
+        matching = [record for record in records if record['original_name'] == fname]
+        candidates = []
+        for record in matching:
+            output_name = record.get('output_name', '')
+            output_stem = Path(output_name).stem.replace(' [ANON]', '')
+            for answer_ext in ('.md', '.txt', '.docx', '.xlsx'):
+                answer = find_by_name(output_stem + ' [ОТВЕТ]' + answer_ext)
+                if answer and answer not in candidates:
+                    candidates.append(answer)
+            anon = find_by_name(output_name)
+            if anon and anon not in candidates:
+                candidates.append(anon)
+        explicit_answers = [path for path in candidates if ' [ОТВЕТ]' in Path(path).stem]
+        if len(explicit_answers) == 1:
+            return explicit_answers[0], selected
+        if not explicit_answers and len(candidates) == 1:
+            return candidates[0], selected
         return None, None
 
     def start_deanon(self):
@@ -731,7 +788,7 @@ class UmbraApp(ctk.CTk):
             anon_path, orig_path = self._resolve_deanon_pair(target)
             if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target and len(targets) == 1:
                 from tkinter import filedialog
-                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Ответ ИИ", "*.md *.doc *.docx *.xlsx *.txt *.csv *.html"), ("Все файлы", "*.*")])
+                picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Безопасный ответ ИИ", "*.md *.docx *.xlsx *.txt"), ("Все файлы", "*.*")])
                 if picked:
                     anon_path, orig_path = picked, target
             if anon_path and orig_path:
@@ -742,6 +799,7 @@ class UmbraApp(ctk.CTk):
             return
 
         self.is_processing = True
+        self.last_out_paths = []
         self.last_out_path = None
         self.btn_open_folder.grid_remove()
         self.btn_copy_ai.grid_remove()
@@ -759,31 +817,65 @@ class UmbraApp(ctk.CTk):
     def _deanon_thread(self, pairs):
         total = len(pairs)
         success_count = 0
-        try:
-            for i, (anon_path, orig_path) in enumerate(pairs):
-                self._ui(lambda idx=i: self.progress_bar.set(idx / total))
-                self._ui(lambda fname=os.path.basename(anon_path): self.set_status(f"Восстановление {fname}...", color=ACCENT_TEXT))
-                
+        errors = []
+        notices = []
+        for i, (anon_path, orig_path) in enumerate(pairs):
+            self._ui(lambda idx=i: self.progress_bar.set(idx / total))
+            self._ui(lambda fname=os.path.basename(anon_path): self.set_status(f"Восстановление {fname}...", color=ACCENT_TEXT))
+            try:
                 result = self.deanon_callback(anon_path, orig_path)
                 if getattr(result, 'needs_confirmation', False):
-                    out_path = result.save()
+                    manual = [index for index, item in enumerate(result.deletions)
+                              if not item.get('auto')]
+                    confirmed = None
+                    if manual:
+                        decision = {'value': False}
+                        ready = threading.Event()
+
+                        def ask():
+                            decision['value'] = messagebox.askyesno(
+                                "Удаления из ответа ИИ",
+                                f"ИИ предложил удалить блоков: {len(manual)}. "
+                                "Применить эти удаления?"
+                            )
+                            ready.set()
+
+                        self._ui(ask)
+                        ready.wait()
+                        confirmed = set(manual) if decision['value'] else set()
+                    out_path = result.save(confirmed)
                     stats = getattr(result, 'stats', {})
                     result = (out_path, stats)
                 out_path, stats = result if isinstance(result, tuple) else (result, {})
                 if out_path:
                     self.last_out_path = out_path
                     success_count += 1
-                    
+                if stats.get('unresolved'):
+                    notices.append(
+                        f"{os.path.basename(anon_path)}: не восстановлено меток — "
+                        f"{stats['unresolved']}"
+                    )
+                notices.extend(
+                    f"{os.path.basename(anon_path)}: {notice}"
+                    for notice in stats.get('notices', [])
+                )
+            except Exception as exc:
+                errors.append((os.path.basename(anon_path), str(exc)))
+
+        try:
             if success_count > 0:
                 self._ui(lambda: self.progress_bar.set(1.0))
                 msg = f"Успешно восстановлено файлов: {success_count} из {total}."
-                self._ui(lambda: self.set_status(msg, color=SUCCESS_COLOR))
+                if errors:
+                    msg += "\nОшибки: " + "; ".join(f"{name} — {error}" for name, error in errors[:3])
+                if notices:
+                    msg += "\nПроверьте: " + "; ".join(notices[:3])
+                color = WARNING_COLOR if errors or notices else SUCCESS_COLOR
+                self._ui(lambda message=msg, chosen=color: self.set_status(message, color=chosen))
                 self._ui(self.btn_open_folder.grid)
             else:
-                self._ui(lambda: self.set_status("Не удалось восстановить данные.", color=ERROR_COLOR))
-        except Exception as e:
-            msg = str(e)
-            self._ui(lambda: self.set_status(f"Ошибка: {msg}", color=ERROR_COLOR))
+                detail = errors[0][1] if errors else "Не удалось восстановить данные."
+                self._ui(lambda message=detail: self.set_status(f"Ошибка: {message}", color=ERROR_COLOR))
         finally:
             self._ui(self._deanon_done)
 
@@ -808,6 +900,7 @@ class UmbraApp(ctk.CTk):
             return
 
         self.is_processing = True
+        self.last_out_paths = []
         self.last_out_path = None
         self.btn_open_folder.grid_remove()
         self.btn_copy_ai.grid_remove()

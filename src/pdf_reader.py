@@ -11,6 +11,8 @@ PDF — это разметка вывода, а не структурирова
 
 import re
 
+MAX_PDF_PAGES = 1_000
+
 
 def extract_lines(path):
     """Возвращает список строк текста PDF (по одной на визуальную строку,
@@ -19,6 +21,8 @@ def extract_lines(path):
     from pypdf import PdfReader
 
     reader = PdfReader(path)
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise ValueError(f'В PDF слишком много страниц (максимум {MAX_PDF_PAGES}).')
     if reader.is_encrypted:
         # Пробуем пустой пароль (часто PDF «зашифрован» без пароля владельца).
         # decrypt возвращает PasswordType (0/NOT_DECRYPTED = неудача) — проверяем
@@ -31,14 +35,20 @@ def extract_lines(path):
             raise ValueError('PDF защищён паролем — снимите защиту и повторите.')
 
     out = []
-    for page in reader.pages:
+    failed_pages = []
+    for page_number, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ''
         except Exception:
-            text = ''
+            failed_pages.append(page_number)
+            continue
         for line in text.split('\n'):
             out.append(line.rstrip())
         out.append('')   # разрыв между страницами
+    if failed_pages:
+        preview = ', '.join(map(str, failed_pages[:10]))
+        more = '…' if len(failed_pages) > 10 else ''
+        raise ValueError(f'Не удалось извлечь текст со страниц: {preview}{more}.')
     # Схлопываем хвостовые пустые строки.
     while out and not out[-1].strip():
         out.pop()

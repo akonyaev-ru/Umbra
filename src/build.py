@@ -14,8 +14,7 @@ def build():
         "PyInstaller",
         "--noconsole",
         "--onefile",
-        "--icon=icon_purple.ico",
-        "--version-file=version_info.txt",
+        "--clean",
         f"--add-data=icon_purple.ico{sep}.",
         f"--add-data=logo.png{sep}.",
         f"--add-data=Audiowide-Regular.ttf{sep}.",
@@ -29,6 +28,8 @@ def build():
         "--distpath=..",
         "--name=Umbra"
     ]
+    if sys.platform == 'win32':
+        cmd.extend(["--icon=icon_purple.ico", "--version-file=version_info.txt"])
 
     external_modules = [
         "customtkinter", "PIL", "psutil", "docx", "razdel", "navec", "slovnet", "markdown_it",
@@ -43,7 +44,18 @@ def build():
 
     cmd.append("main.py")
     
-    subprocess.run(cmd, check=True)
+    env = os.environ.copy()
+    env.setdefault("PYTHONHASHSEED", "0")
+    if "SOURCE_DATE_EPOCH" not in env:
+        try:
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            env["SOURCE_DATE_EPOCH"] = subprocess.check_output(
+                ["git", "log", "-1", "--format=%ct"], cwd=repo_root,
+                text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            env["SOURCE_DATE_EPOCH"] = "0"
+    subprocess.run(cmd, check=True, env=env)
     print("Build complete.")
 
 if __name__ == "__main__":

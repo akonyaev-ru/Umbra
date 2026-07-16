@@ -1,13 +1,17 @@
 import os
 import sys
 import shutil
+import json
+import zipfile
 from pathlib import Path
+import pytest
 
 # Добавляем src в PYTHONPATH
 src_dir = Path(__file__).parent.parent / 'src'
 sys.path.insert(0, str(src_dir))
 
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
 
@@ -117,6 +121,7 @@ def test_xlsx_numeric_and_comment(tmp_path):
     proc = DocumentProcessor(nlp)
     wb = openpyxl.Workbook()
     ws = wb.active
+    ws.title = 'Клиент Иванов'
     ws['A1'] = 7707083893                 # ИНН как число
     ws['A2'] = 5                          # короткое число — не ПДн, не трогаем
     ws['B1'].comment = Comment('Клиент Петров, ИНН 7707083893', 'Сидоров')
@@ -128,6 +133,7 @@ def test_xlsx_numeric_and_comment(tmp_path):
     assert '7707083893' not in str(w['A1'].value)
     assert w['A2'].value == 5
     assert '7707083893' not in (w['B1'].comment.text or '')
+    assert w.title == 'Лист 1'
 
 
 def test_underscore_label_merge_invariant(tmp_path):
@@ -175,8 +181,7 @@ def test_docx_core_properties_scrubbed(tmp_path):
 
 
 def test_roundtrip_csv_html_xlsx(tmp_path):
-    """Форматы .csv/.html/.xlsx должны не только обезличиваться, но и
-    ВОССТАНАВЛИВАТЬСЯ: раньше _load_mapping их не умел и деанонимизация падала."""
+    """CSV/HTML становятся инертным текстом, XLSX остаётся безопасным XLSX."""
     os.chdir(str(src_dir))
     nlp = NLPProcessor()
     proc = DocumentProcessor(nlp)
@@ -184,16 +189,22 @@ def test_roundtrip_csv_html_xlsx(tmp_path):
     csv_src = tmp_path / 'd.csv'
     csv_src.write_text('Клиент,Телефон\nИванов Иван Иванович,+7 (495) 123-45-67\n',
                        encoding='utf-8')
-    out, stats = proc.deanonymize_file(proc.process_file(str(csv_src)), str(csv_src))
+    csv_anon = proc.process_file(str(csv_src))
+    assert csv_anon.endswith('.txt')
+    out, stats = proc.deanonymize_file(csv_anon, str(csv_src))
     assert 'Иванов Иван Иванович' in open(out, encoding='utf-8').read()
     assert stats['restored'] > 0
 
     html_src = tmp_path / 'd.html'
     html_src.write_text('<p>Директор Петров Пётр Петрович</p>'
                         '<a href="mailto:p@corp.ru">x</a>', encoding='utf-8')
-    out, stats = proc.deanonymize_file(proc.process_file(str(html_src)), str(html_src))
+    html_anon = proc.process_file(str(html_src))
+    assert html_anon.endswith('.txt')
+    assert 'mailto:' not in open(html_anon, encoding='utf-8').read()
+    out, stats = proc.deanonymize_file(html_anon, str(html_src))
     restored = open(out, encoding='utf-8').read()
-    assert 'Петров Пётр Петрович' in restored and 'p@corp.ru' in restored
+    assert 'Петров Пётр Петрович' in restored
+    assert 'p@corp.ru' not in restored  # скрытые атрибуты намеренно отбрасываются
 
     import openpyxl
     wb = openpyxl.Workbook()
@@ -202,6 +213,100 @@ def test_roundtrip_csv_html_xlsx(tmp_path):
     wb.save(str(xlsx_src))
     out, stats = proc.deanonymize_file(proc.process_file(str(xlsx_src)), str(xlsx_src))
     assert openpyxl.load_workbook(out).active['A1'].value == 'Сидоров Сидор Сидорович'
+
+
+def test_manifest_binds_unchanged_original_without_pii(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'person.txt'
+    source.write_text('Иванов Иван Иванович, ivanov@example.org', encoding='utf-8')
+    anon = proc.process_file(str(source))
+    manifest_path = Path(anon + '.umbra.json')
+    data = json.loads(manifest_path.read_text(encoding='utf-8'))
+    serialized = manifest_path.read_text(encoding='utf-8')
+    assert data['schema'] == 1
+    assert 'mapping' not in data
+    assert 'Иванов' not in serialized and 'ivanov@example.org' not in serialized
+
+    source.write_text('Иванов Иван Иванович, изменено', encoding='utf-8')
+    with pytest.raises(ValueError, match='паспорт'):
+        proc.deanonymize_file(anon, str(source))
+
+
+def test_active_and_opaque_content_rejected(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+
+    old_doc = tmp_path / 'legacy.doc'
+    old_doc.write_bytes(b'not opened')
+    with pytest.raises(ValueError, match=r'\.doc отключён'):
+        proc.process_file(str(old_doc))
+
+    workbook_path = tmp_path / 'formula.xlsx'
+    import openpyxl
+    workbook = openpyxl.Workbook()
+    workbook.active['A1'] = '=WEBSERVICE("https://attacker.invalid/")'
+    workbook.save(workbook_path)
+    with pytest.raises(ValueError, match='Формулы Excel'):
+        proc.process_file(str(workbook_path))
+
+    docx_path = tmp_path / 'embedded.docx'
+    Document().save(docx_path)
+    with zipfile.ZipFile(docx_path, 'a') as archive:
+        archive.writestr('word/media/private.txt', 'Иванов Иван Иванович')
+    with pytest.raises(ValueError, match='вложения'):
+        proc.process_file(str(docx_path))
+
+    linked_path = tmp_path / 'linked.docx'
+    linked = Document()
+    linked.add_paragraph('Безопасный видимый текст')
+    linked.part.relate_to('https://attacker.invalid/collect', RT.HYPERLINK,
+                          is_external=True)
+    linked.save(linked_path)
+    with pytest.raises(ValueError, match='внешнюю ссылку'):
+        proc.process_file(str(linked_path))
+
+
+def test_ner_failure_stops_anonymization(tmp_path, monkeypatch):
+    os.chdir(str(src_dir))
+    nlp = NLPProcessor()
+    proc = DocumentProcessor(nlp)
+    source = tmp_path / 'person.txt'
+    source.write_text('Иванов Иван Иванович', encoding='utf-8')
+
+    def broken(_text):
+        raise RuntimeError('NER unavailable')
+
+    monkeypatch.setattr(nlp, '_ner_markup', broken)
+    with pytest.raises(RuntimeError, match='NER unavailable'):
+        proc.process_file(str(source))
+    assert not (tmp_path / 'person [ANON].txt').exists()
+
+
+def test_existing_output_is_not_overwritten(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'person.txt'
+    source.write_text('Телефон +7 999 123-45-67', encoding='utf-8')
+    first = proc.process_file(str(source))
+    first_bytes = Path(first).read_bytes()
+    second = proc.process_file(str(source))
+    assert second != first
+    assert Path(first).read_bytes() == first_bytes
+    assert Path(second).exists()
+
+
+def test_text_dates_and_long_list_numbering(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'dates.txt'
+    source.write_text('Подписано 14.07.2026.', encoding='utf-8')
+    anon = proc.process_file(str(source), hide_dates=True)
+    assert '[ДАТА_1]' in Path(anon).read_text(encoding='utf-8')
+
+    from md_serializer import _fmt_number
+    assert _fmt_number(27, 'lowerLetter') == 'aa'
+    assert _fmt_number(27, 'upperLetter') == 'AA'
 
 
 def test_clipboard_extract_text_covers_output_formats(tmp_path):

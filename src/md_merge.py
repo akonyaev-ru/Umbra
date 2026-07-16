@@ -269,6 +269,11 @@ def _dp_align(base_win, ai_win):
     """Локальное выравнивание внутри replace-окна: DP по сумме сходств с платой
     за пропуск. Возвращает список пар (bi, ai) в порядке следования."""
     n, m = len(base_win), len(ai_win)
+    if n * m > MAX_DP_CELLS:
+        raise ValueError(
+            'Слишком большой переписанный фрагмент для безопасного слияния. '
+            'Разбейте ответ ИИ на меньшие части.'
+        )
     GAP = 0.20
     score = [[0.0] * (m + 1) for _ in range(n + 1)]
     back = [[None] * (m + 1) for _ in range(n + 1)]
@@ -311,6 +316,10 @@ def align_blocks(base_blocks, ai_blocks):
       ('split', bi, (ai1, ai2)) ('deleted', bi) ('inserted', ai, prev_bi)
     prev_bi — индекс последнего базового блока перед вставкой (или -1).
     Сноски в выравнивании не участвуют (сопоставляются по ключу отдельно)."""
+    if len(base_blocks) > MAX_BLOCKS or len(ai_blocks) > MAX_BLOCKS:
+        raise ValueError(
+            f'Документ превышает лимит безопасного слияния ({MAX_BLOCKS} блоков).'
+        )
     base_norms = [b['norm'] for b in base_blocks]
     ai_norms = [a['norm'] for a in ai_blocks]
 
@@ -608,8 +617,11 @@ def merge_ai_md(ai_text, base_blocks, mapping, notes, apply_spans):
             report['equal'] += 1
             matched_base += 1
         elif kind == 'moved':
-            report['moved'] += 1
             matched_base += 1
+            report['warnings'].append(
+                'ИИ переставил блок; Umbra сохранила исходный порядок, чтобы не '
+                'переместить XML в неверную секцию или таблицу.'
+            )
         elif kind == 'modified':
             b, a = base_main[op[1]], ai_blocks[op[2]]
             matched_base += 1
@@ -758,12 +770,21 @@ def merge_ai_md(ai_text, base_blocks, mapping, notes, apply_spans):
         target = _prepare_target(ab['text'], {})
         # Тот же инвариант меток, что и для абзацев (см. modify_para): при
         # расхождении меток оставляем оригинал сноски.
-        if _labels(para.text) != _labels(target):
+        old_combined = ' '.join(p.text for p in paras if p.text.strip())
+        if _labels(old_combined) != _labels(target):
             report['label_mismatch'] += 1
             continue
-        reps = _word_diff_spans(para.text, target)
-        if reps:
-            apply_spans(para, reps)
+        if normalize_for_align(old_combined) != normalize_for_align(target):
+            # Markdown represents one note as one definition, so a changed
+            # multi-paragraph note necessarily becomes one paragraph.  Replace
+            # the first paragraph while preserving its run formatting and
+            # remove the remaining XML paragraphs instead of silently leaving
+            # stale text behind.
+            apply_spans(para, [{'start': 0, 'stop': len(para.text), 'ins': target}])
+            for extra in paras[1:]:
+                parent = extra._p.getparent()
+                if parent is not None:
+                    parent.remove(extra._p)
             notes.mark_changed(*key)
             report['notes_modified'] += 1
             report['changed_texts'].append(target)
@@ -802,3 +823,5 @@ def apply_deletions(deletions, confirmed=None):
             el.getparent().remove(el)
             removed += 1
     return removed
+MAX_BLOCKS = 2_000
+MAX_DP_CELLS = 250_000

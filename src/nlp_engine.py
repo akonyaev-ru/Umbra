@@ -274,18 +274,18 @@ class NLPProcessor:
             (re.compile(r'(?:ОГРН[ИП]?\s*[:/№]?\s*)(\d{13,15})'), TAG_OGRN, 1),
             (re.compile(r'\b(\d{15})\b'), TAG_OGRN, 1),
             (re.compile(r'\b(\d{13})\b'), TAG_OGRN, 1),
-            (re.compile(r'(?:ИНН(?:[\s\w\(\)]*?)?\s*[:/№]?\s*)(\d{12})(?!\d)'), TAG_INN_FL, 1),
+            (re.compile(r'(?:ИНН(?:[\s\w()]{0,80}?)?\s*[:/№]?\s*)(\d{12})(?!\d)'), TAG_INN_FL, 1),
             (re.compile(r'\b(\d{12})\b'), TAG_INN_FL, 1),
-            (re.compile(r'(?:ИНН(?:[\s\w\(\)]*?)?\s*[:/№]?\s*)(\d{10})(?!\d)'), TAG_INN_UL, 1),
+            (re.compile(r'(?:ИНН(?:[\s\w()]{0,80}?)?\s*[:/№]?\s*)(\d{10})(?!\d)'), TAG_INN_UL, 1),
             (re.compile(r'\b(\d{10})\b'), TAG_INN_UL, 1),
             (re.compile(r'(?:КПП\s*[:/№]?\s*)(\d{9})'), TAG_KPP, 1),
-            (re.compile(r'(?:БИК(?:[\s\w]*?)?\s*[:/№]?\s*)(\d{9})'), TAG_BIK, 1),
+            (re.compile(r'(?:БИК(?:[\s\w]{0,80}?)?\s*[:/№]?\s*)(\d{9})'), TAG_BIK, 1),
             (re.compile(r'\b(04\d{7})\b'), TAG_BIK, 1), # БИК всегда с 04
             (re.compile(r'(?:SWIFT|свифт)\s*[:/]?\s*([A-Z]{6}[A-Z0-9]{2,5})'), TAG_SWIFT, 1),
 
             # 6. Контакты
             # E-mail, включая кириллические домены (IDN, напр. «почта.рф») и локальную часть.
-            (re.compile(r'([a-zA-Zа-яёА-ЯЁ0-9_.+-]+@[a-zA-Zа-яёА-ЯЁ0-9-]+\.[a-zA-Zа-яёА-ЯЁ0-9-.]+)'), TAG_EMAIL, 1),
+            (re.compile(r'(?<![a-zA-Zа-яёА-ЯЁ0-9_.+-])([a-zA-Zа-яёА-ЯЁ0-9_.+-]{1,64}@[a-zA-Zа-яёА-ЯЁ0-9-]{1,63}(?:\.[a-zA-Zа-яёА-ЯЁ0-9-]{1,63}){1,8})(?![a-zA-Zа-яёА-ЯЁ0-9_.+-])'), TAG_EMAIL, 1),
             # Городской формат со скобками, в т.ч. без кода страны: «(495) 123-45-67», «(49232) 1-23-45».
             (re.compile(r'(?<!\d)(\(\d{3,5}\)[\s\-]?\d{1,3}[\s\-]?\d{2}[\s\-]?\d{2})(?!\d)'), TAG_PHONE, 1),
             # Городской номер 3-2-2 через дефис без кода страны: «123-45-67» (не часть более длинного кода).
@@ -336,10 +336,7 @@ class NLPProcessor:
         surfaces, tokens = {}, {}
         if not text or not text.strip():
             return surfaces, tokens
-        try:
-            markup = self._ner_markup(text)
-        except Exception:
-            return surfaces, tokens
+        markup = self._ner_markup(text)
         for span in markup.spans:
             if span.type not in ('PER', 'ORG'):
                 continue
@@ -389,31 +386,24 @@ class NLPProcessor:
         if not text or not text.strip():
             return []
 
-        # NER — самая хрупкая часть конвейера. Если она упадёт на конкретном
-        # фрагменте, НЕ отбрасываем весь абзац: regex-слой (телефоны, e-mail,
-        # счета, суммы, идентификаторы) и сквозная протяжка имён работают без NER
-        # и обязаны отработать всё равно — иначе НЕанонимизированный текст молча
-        # утёк бы. (Под --noconsole sys.stdout is None, поэтому не логируем.)
-        try:
-            markup = self._ner_markup(text)
-        except Exception:
-            markup = None
+        # A failed NER pass is a privacy boundary failure.  Continuing with only
+        # regexes would silently leak names and organisations.
+        markup = self._ner_markup(text)
 
         replacements = []
-        if markup is not None:
-            for span in markup.spans:
-                category = None
-                if span.type == 'PER' and hide_names:
-                    category = TAG_PER
-                elif span.type == 'LOC' and hide_locations:
-                    # «РФ», «Российская Федерация» — указание юрисдикции, не адрес.
-                    if not _is_country_ref(text[span.start:span.stop]):
-                        category = TAG_ADDR
-                elif span.type == 'ORG' and hide_orgs:
-                    category = TAG_ORG
+        for span in markup.spans:
+            category = None
+            if span.type == 'PER' and hide_names:
+                category = TAG_PER
+            elif span.type == 'LOC' and hide_locations:
+                # «РФ», «Российская Федерация» — указание юрисдикции, не адрес.
+                if not _is_country_ref(text[span.start:span.stop]):
+                    category = TAG_ADDR
+            elif span.type == 'ORG' and hide_orgs:
+                category = TAG_ORG
 
-                if category and self._keep_ner_span(text[span.start:span.stop]):
-                    replacements.append({'start': span.start, 'stop': span.stop, 'category': category})
+            if category and self._keep_ner_span(text[span.start:span.stop]):
+                replacements.append({'start': span.start, 'stop': span.stop, 'category': category})
 
         # Regex: скрываем только ЧУВСТВИТЕЛЬНУЮ группу (остальное — «руб.», «№»,
         # «д.» — остаётся в тексте).

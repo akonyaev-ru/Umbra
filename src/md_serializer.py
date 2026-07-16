@@ -172,17 +172,29 @@ def _to_roman(n):
     return ''.join(out) or 'I'
 
 
+def _to_letters(n, alphabet):
+    """1 -> a, 26 -> z, 27 -> aa (and the equivalent Russian alphabet)."""
+    if n < 1:
+        return alphabet[0]
+    out = []
+    base = len(alphabet)
+    while n:
+        n, remainder = divmod(n - 1, base)
+        out.append(alphabet[remainder])
+    return ''.join(reversed(out))
+
+
 def _fmt_number(n, fmt):
     if fmt == 'decimal' or fmt == 'decimalZero':
         return str(n)
     if fmt == 'lowerLetter':
-        return _FMT_ALPHA_EN[(n - 1) % 26]
+        return _to_letters(n, _FMT_ALPHA_EN)
     if fmt == 'upperLetter':
-        return _FMT_ALPHA_EN[(n - 1) % 26].upper()
+        return _to_letters(n, _FMT_ALPHA_EN).upper()
     if fmt == 'russianLower':
-        return _FMT_ALPHA_RU[(n - 1) % len(_FMT_ALPHA_RU)]
+        return _to_letters(n, _FMT_ALPHA_RU)
     if fmt == 'russianUpper':
-        return _FMT_ALPHA_RU[(n - 1) % len(_FMT_ALPHA_RU)].upper()
+        return _to_letters(n, _FMT_ALPHA_RU).upper()
     if fmt == 'lowerRoman':
         return _to_roman(n).lower()
     if fmt == 'upperRoman':
