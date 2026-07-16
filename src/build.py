@@ -25,8 +25,6 @@ def build():
         "--copy-metadata=navec",
         "-y",
         "--copy-metadata=razdel",
-        "--copy-metadata=transformers",
-        "--copy-metadata=torch",
         "--distpath=..",
         "--name=Umbra"
     ]
@@ -35,8 +33,7 @@ def build():
 
     external_modules = [
         "customtkinter", "PIL", "docx", "razdel", "navec", "slovnet", "markdown_it",
-        "pypdf", "pdfplumber", "fitz", "transformers", "torch", "safetensors",
-        "tkinter.messagebox", "tkinter.filedialog"
+        "pypdf", "pdfplumber", "fitz", "tkinter.messagebox", "tkinter.filedialog"
     ]
     if sys.platform == 'win32':
         external_modules.extend([
