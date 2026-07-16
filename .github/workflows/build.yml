@@ -28,7 +28,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.14' # Используем 3.14 согласно AGENTS.md
+          python-version: '3.12' # Используем 3.12 согласно AGENTS.md
           cache: 'pip'
 
       - name: Install dependencies
@@ -71,7 +71,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.14' # Используем 3.14
+          python-version: '3.12' # Используем 3.12
           cache: 'pip'
 
       - name: Install dependencies
@@ -112,7 +112,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.14'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install Tcl/Tk runtime

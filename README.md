@@ -1,6 +1,6 @@
 # 🛡️ Umbra
 
-![Python](https://img.shields.io/badge/python-3.14-blue)
+![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Build](https://github.com/akonyaev-ru/Umbra/actions/workflows/build.yml/badge.svg)
@@ -19,7 +19,7 @@
 * **Ограничения распознавания:** автоматическая анонимизация не гарантирует обнаружение всех возможных персональных данных. Проверяйте обезличенный текст перед отправкой третьей стороне.
 
 ## 💻 Технологии
-* **Язык:** Python 3.14 (64-бит)
+* **Язык:** Python 3.12 (64-бит)
 * **Интерфейс:** `customtkinter`, Drag-and-Drop на Windows через `windnd`
 * **NLP (Обработка текста):** `navec` (эмбеддинги), `slovnet` (NER), `razdel` (проект Natasha)
 * **Работа с документами:** `python-docx`, `pdfplumber` и `pypdf` (PDF → DOCX), `openpyxl`, `markdown-it-py`
@@ -43,7 +43,7 @@
 ---
 
 ## 🛠 Как собрать проект из исходников (для разработчиков)
-1. Убедитесь, что установлен Python 3.14 и зависимости (`requirements.txt`).
+1. Убедитесь, что установлен Python 3.12 и зависимости (`requirements.txt`).
 2. Перейдите в папку с кодом:
    ```cmd
    cd src
