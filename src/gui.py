@@ -8,12 +8,13 @@ from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox
 from PIL import Image
-import sys
+import naming
+windnd = None
 if sys.platform == 'win32':
     try:
         import windnd
     except ImportError:
-        pass
+        windnd = None
 
 try:
     import ctypes
@@ -30,8 +31,6 @@ try:
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
     pass
-
-from file_detector import get_open_files
 
 # Следуем системной теме Windows (светлая/тёмная).
 ctk.set_appearance_mode("System")
@@ -136,14 +135,17 @@ class DocumentCard(ctk.CTkFrame):
 
 
 class UmbraApp(ctk.CTk):
-    def __init__(self, process_callback, deanon_callback=None):
+    def __init__(self, process_callback, deanon_callback=None, cleanup_callback=None):
         super().__init__(fg_color=BG_COLOR)
 
         self.process_callback = process_callback
         self.deanon_callback = deanon_callback
-        self.open_files_data = []
-        self.manual_files = []      # выбранные вручную (в т.ч. PDF), переживают refresh
+        self.cleanup_callback = cleanup_callback
+        self.files = []             # документы, которые дал пользователь (дроп/кнопка)
         self.selected_files = set()
+        # Ставится в True только после успешной привязки windnd (конец __init__),
+        # но читается из _render_cards — инициализируем здесь, до первой отрисовки.
+        self.dnd_enabled = False
         self.last_out_paths = []
         self.last_out_path = None
 
@@ -240,7 +242,7 @@ class UmbraApp(ctk.CTk):
 
         self.list_title = ctk.CTkLabel(
             self.list_header_frame,
-            text="Открытые документы",
+            text="Документы",
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
             text_color=MUTED_COLOR
         )
@@ -251,34 +253,19 @@ class UmbraApp(ctk.CTk):
         # ВТОРОЙ BooleanVar, который читал export_md, тогда как переключатель
         # менял ПЕРВЫЙ — тумблер был мёртв. Не воссоздавать переменную здесь.
 
-        # «Выбрать файл» — для документов, которых нет среди открытых в Word
-        # (в первую очередь PDF: их не поймать через детектор открытых окон).
+        # Равноправная альтернатива перетаскиванию: на macOS/Linux windnd
+        # недоступен, и эта кнопка там — единственный способ дать документ.
         self.btn_pick = ctk.CTkButton(
             self.list_header_frame,
             text="Выбрать файл",
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             fg_color="transparent", hover_color=HOVER_COLOR, text_color=ACCENT_TEXT,
-            border_width=2, border_color=BORDER_COLOR,
+            border_width=2,   # 1 px на HiDPI почти не читался
+            border_color=BORDER_COLOR,
             width=120, height=32, corner_radius=8,
             command=self.pick_file,
         )
-        self.btn_pick.grid(row=0, column=1, sticky="e", padx=(0, 8))
-
-        self.btn_refresh = ctk.CTkButton(
-            self.list_header_frame,
-            text="Обновить",
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="transparent",
-            hover_color=HOVER_COLOR,
-            text_color=ACCENT_TEXT,
-            border_width=2,   # 1 px на HiDPI почти не читался
-            border_color=BORDER_COLOR,
-            width=100,
-            height=32,
-            corner_radius=8,
-            command=self.refresh_files
-        )
-        self.btn_refresh.grid(row=0, column=2, sticky="e")
+        self.btn_pick.grid(row=0, column=1, sticky="e")
 
         self.files_scroll = ctk.CTkScrollableFrame(
             self.content_wrapper,
@@ -391,17 +378,42 @@ class UmbraApp(ctk.CTk):
         self.is_processing = False
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        # Windows Drag and Drop
-        if sys.platform == 'win32':
+        # Drag-and-drop (Windows). windnd экспортирует ТОЛЬКО hook_dropfiles:
+        # прежний hook_drop бросал AttributeError прямо в пустой except, из-за
+        # чего перетаскивание не работало ни разу. force_unicode=True обязателен —
+        # иначе windnd отдаёт путь байтами в mbcs, и кириллица в нём рвётся.
+        if sys.platform == 'win32' and windnd is not None:
             try:
-                windnd.hook_drop(self, self._on_drop)
-            except Exception:
-                pass
+                windnd.hook_dropfiles(self, func=self._on_drop, force_unicode=True)
+                self.dnd_enabled = True
+            except Exception as exc:
+                print(f"Drag-and-drop недоступен: {exc}", file=sys.stderr)
+
+        # Кнопки «Обновить» больше нет, а список стартует пустым: без этого
+        # вызова пользователь увидел бы пустую панель без единой подсказки.
+        self.refresh_files()
 
     def _on_drop(self, filenames):
-        if self.is_processing: return
-        existing = {f["path"] for f in self.manual_files}
+        """Приём перетащенных файлов и папок — основной способ дать документ."""
+        if self.is_processing:
+            return
+        existing = {f["path"] for f in self.files}
         added = 0
+        rejected = []
+        truncated = False
+
+        def accept(path):
+            nonlocal added
+            if path not in existing:
+                self.files.append({
+                    "name": os.path.basename(path),
+                    "path": path,
+                    "type": os.path.splitext(path)[1].lower(),
+                })
+                existing.add(path)
+                added += 1
+            self.selected_files.add(path)
+
         for raw in filenames:
             path = raw.decode("mbcs") if isinstance(raw, bytes) else raw
             path = os.path.abspath(path)
@@ -411,23 +423,46 @@ class UmbraApp(ctk.CTk):
                                if not os.path.islink(os.path.join(root, name))]
                     for file in files:
                         if file.lower().endswith(SUPPORTED_EXTENSIONS):
-                            fpath = os.path.join(root, file)
-                            if fpath not in existing:
-                                self.manual_files.append({"name": os.path.basename(fpath), "path": fpath, "type": os.path.splitext(fpath)[1].lower()})
-                                existing.add(fpath)
-                                added += 1
-                            self.selected_files.add(fpath)
+                            accept(os.path.join(root, file))
                             if added >= 1_000:
-                                self.set_status("Добавлены первые 1000 файлов из папки.", color=WARNING_COLOR)
+                                truncated = True
                                 break
-                    if added >= 1_000:
+                    if truncated:
                         break
             elif path.lower().endswith(SUPPORTED_EXTENSIONS):
-                if path not in existing:
-                    self.manual_files.append({"name": os.path.basename(path), "path": path, "type": os.path.splitext(path)[1].lower()})
-                    existing.add(path)
-                self.selected_files.add(path)
+                accept(path)
+            else:
+                rejected.append(path)
+
         self.refresh_files(reset_status=False)
+        # Молча проглоченный дроп читается как «программа сломана» — для
+        # DnD-first это главный источник недоверия. Объясняем отказ.
+        if truncated:
+            self.set_status("Добавлены первые 1000 файлов из папки.", color=WARNING_COLOR)
+        elif rejected and not added:
+            self.set_status(self._reject_reason(rejected), color=ERROR_COLOR)
+
+    def _empty_state_text(self):
+        """Пустой список — главный экран программы, он же инструкция.
+        windnd работает только на Windows, поэтому на macOS/Linux
+        единственный честный совет — кнопка выбора файла."""
+        if self.dnd_enabled:
+            return ("Перетащите документ сюда\n"
+                    "или нажмите «Выбрать файл».\n\n"
+                    ".docx, .xlsx, .txt, .pdf, .csv, .html")
+        return ("Нажмите «Выбрать файл».\n\n"
+                ".docx, .xlsx, .txt, .pdf, .csv, .html")
+
+    @staticmethod
+    def _reject_reason(rejected):
+        exts = {os.path.splitext(path)[1].lower() for path in rejected}
+        if '.doc' in exts:
+            return ("Старый формат .doc не поддерживается: его открытие может "
+                    "запускать макросы Word.\n"
+                    "Сохраните документ в Word как .docx и перетащите снова.")
+        listed = ', '.join(sorted(ext for ext in exts if ext)) or 'без расширения'
+        return (f"Не подходит: {listed}.\n"
+                "Перетащите .docx, .xlsx, .txt, .pdf, .csv или .html.")
 
     def _apply_crisp_icon(self, window=None):
         """Ставит чёткую иконку окна и панели задач Windows-нативно.
@@ -518,15 +553,15 @@ class UmbraApp(ctk.CTk):
         self.document_cards.clear()
 
         if hasattr(self.files_scroll, '_scrollbar'):
-            if len(self.open_files_data) <= 3:
+            if len(self.files) <= 3:
                 self.files_scroll._scrollbar.grid_remove()
             else:
                 self.files_scroll._scrollbar.grid()
 
-        if not self.open_files_data:
+        if not self.files:
             lbl = ctk.CTkLabel(
                 self.files_scroll,
-                text="Открытых документов нет.\nОткройте файл в Word и нажмите «Обновить».",
+                text=self._empty_state_text(),
                 text_color=MUTED_COLOR,
                 font=ctk.CTkFont(family="Segoe UI", size=14),
                 justify="center",
@@ -539,14 +574,14 @@ class UmbraApp(ctk.CTk):
 
         self.btn_anonymize.configure(state="normal")
 
-        for file_info in self.open_files_data:
+        for file_info in self.files:
             is_selected = (file_info['path'] in self.selected_files)
             card = DocumentCard(self.files_scroll, file_info, self.select_file, is_selected=is_selected)
             card.pack(fill="x", pady=(0, 8), padx=(8, 8))
             self.document_cards.append(card)
 
     def pick_file(self):
-        """Ручной выбор файла (в т.ч. PDF, которого нет среди открытых окон).
+        """Выбор файла через диалог — альтернатива перетаскиванию.
         Добавляет его в список и выбирает."""
         if self.is_processing:
             return
@@ -559,8 +594,8 @@ class UmbraApp(ctk.CTk):
             return
         for path in paths:
             path = os.path.abspath(path)
-            if path not in [f['path'] for f in self.manual_files]:
-                self.manual_files.append({
+            if path not in [f['path'] for f in self.files]:
+                self.files.append({
                     'name': os.path.basename(path), 'path': path,
                     'type': os.path.splitext(path)[1].lower(),
                 })
@@ -571,22 +606,18 @@ class UmbraApp(ctk.CTk):
         if self.is_processing:
             return
 
-        # Список = открытые в Word/Notepad + выбранные вручную (в т.ч. PDF).
-        # Ручные файлы, которых уже нет на диске, отсеиваем.
-        self.manual_files = [f for f in self.manual_files if os.path.exists(f['path'])]
-        detected = get_open_files()
-        seen = {f['path'] for f in detected}
-        self.open_files_data = detected + [f for f in self.manual_files if f['path'] not in seen]
+        # Список — только то, что дал пользователь. Файлы, которых уже нет
+        # на диске (перемещены/удалены после дропа), отсеиваем.
+        self.files = [f for f in self.files if os.path.exists(f['path'])]
 
-        # Выбор — множественный (self.selected_files, набор путей). Если открытых
-        # файлов не осталось, сбрасываем выбор. Отдельного self.selected_file_path
-        # в этой модели нет: обращение к нему роняло refresh_files (AttributeError)
-        # и список карточек не отрисовывался вовсе.
-        if not self.open_files_data:
+        # Выбор — множественный (self.selected_files, набор путей). Отдельного
+        # self.selected_file_path в этой модели нет: обращение к нему роняло
+        # refresh_files (AttributeError) и карточки не отрисовывались вовсе.
+        if not self.files:
             self.selected_files.clear()
         else:
             # Оставляем в выборе только пути, которые ещё присутствуют в списке.
-            available = {f['path'] for f in self.open_files_data}
+            available = {f['path'] for f in self.files}
             self.selected_files = {p for p in self.selected_files if p in available}
 
         # reset_status=False сохраняет сообщение о результате обработки,
@@ -594,12 +625,16 @@ class UmbraApp(ctk.CTk):
         if reset_status:
             self.btn_open_folder.grid_remove()
             self.btn_copy_ai.grid_remove()
-            if self.open_files_data:
+            if self.files:
                 self.set_status("Выберите документ и нажмите «Анонимизировать».\n"
                                 "Будут скрыты ФИО, организации, адреса, телефоны, e-mail и счета.\n"
                                 "Обязательно проверяйте результат перед отправкой.")
+            elif self.dnd_enabled:
+                self.set_status("Перетащите документ в окно или нажмите «Выбрать файл» "
+                                "(поддерживаются .docx, .xlsx, .txt, .pdf, .csv, .html).\n"
+                                "Обязательно проверяйте результат перед отправкой.")
             else:
-                self.set_status("Откройте документ в Word или нажмите «Выбрать файл» "
+                self.set_status("Нажмите «Выбрать файл» "
                                 "(поддерживаются .docx, .xlsx, .txt, .pdf, .csv, .html).\n"
                                 "Обязательно проверяйте результат перед отправкой.")
 
@@ -610,7 +645,7 @@ class UmbraApp(ctk.CTk):
 
     def _set_controls_enabled(self, enabled):
         state = "normal" if enabled else "disabled"
-        self.btn_refresh.configure(state=state)
+        self.btn_pick.configure(state=state)
 
     def open_result_folder(self):
         path = self.last_out_path
@@ -709,27 +744,30 @@ class UmbraApp(ctk.CTk):
     def _resolve_deanon_pair(self, selected):
         """По выбранному документу определяет пару (ответ ИИ, оригинал).
 
-        Ответ ИИ ищется в порядке предпочтения: '<имя> [ОТВЕТ].md' (юрист
-        сохранил ответ отдельно), '<имя> [ANON].md' (перезаписал наш экспорт),
-        '<имя> [ANON].<ext>' (классический docx/txt-контур). Оригинал — рядом
-        на диске и среди открытых. Возвращает (anon_path, orig_path) или (None, None)."""
+        Ответ ИИ ищется в порядке предпочтения: '[ОТВЕТ] <имя>.md' (юрист
+        сохранил ответ отдельно), '[ANON] <имя>.md' (перезаписал наш экспорт),
+        '[ANON] <имя>.<ext>' (классический docx/txt-контур). Оригинал — рядом на
+        диске и среди данных нам файлов. Возвращает (anon_path, orig_path) или (None, None)."""
         folder, fname = os.path.split(selected)
         base, _ext = os.path.splitext(fname)
-        open_paths = [f['path'] for f in self.open_files_data]
+        # Пара может лежать не в одной папке: юрист мог перетащить оригинал и
+        # ответ ИИ из разных мест (типично — ответ из Загрузок). Поэтому ищем
+        # и рядом на диске, и среди всех файлов, которые пользователь нам дал.
+        known_paths = [f['path'] for f in self.files]
 
         def find_by_name(target_name):
             p = os.path.join(folder, target_name)
             if os.path.exists(p):
                 return p
-            for op in open_paths:
-                if os.path.basename(op) == target_name and os.path.exists(op):
-                    return op
+            for known in known_paths:
+                if os.path.basename(known) == target_name and os.path.exists(known):
+                    return known
             return None
 
         def manifests():
             result = []
             for path in Path(folder).glob('*.umbra.json'):
-                if ' [ANON]' not in path.name:
+                if not naming.has_marker(path.name, naming.ANON):
                     continue
                 try:
                     if path.stat().st_size > 1024 * 1024:
@@ -743,10 +781,10 @@ class UmbraApp(ctk.CTk):
             return result
 
         records = manifests()
-        if ' [ОТВЕТ]' in base or ' [ANON]' in base:
-            clean = base.replace(' [ОТВЕТ]', '').replace(' [ANON]', '')
+        if naming.has_marker(base, naming.ANSWER) or naming.has_marker(base, naming.ANON):
+            clean = naming.strip_markers(base)
             names = {record['original_name'] for record in records
-                     if Path(record.get('output_name', '')).stem.replace(' [ANON]', '') == clean}
+                     if naming.strip_markers(Path(record.get('output_name', '')).stem) == clean}
             if len(names) == 1:
                 orig = find_by_name(names.pop())
                 if orig:
@@ -759,15 +797,16 @@ class UmbraApp(ctk.CTk):
         candidates = []
         for record in matching:
             output_name = record.get('output_name', '')
-            output_stem = Path(output_name).stem.replace(' [ANON]', '')
+            output_stem = naming.strip_markers(Path(output_name).stem)
             for answer_ext in ('.md', '.txt', '.docx', '.xlsx'):
-                answer = find_by_name(output_stem + ' [ОТВЕТ]' + answer_ext)
+                answer = find_by_name(naming.build_name(output_stem, naming.ANSWER, answer_ext))
                 if answer and answer not in candidates:
                     candidates.append(answer)
             anon = find_by_name(output_name)
             if anon and anon not in candidates:
                 candidates.append(anon)
-        explicit_answers = [path for path in candidates if ' [ОТВЕТ]' in Path(path).stem]
+        explicit_answers = [path for path in candidates
+                            if naming.has_marker(Path(path).stem, naming.ANSWER)]
         if len(explicit_answers) == 1:
             return explicit_answers[0], selected
         if not explicit_answers and len(candidates) == 1:
@@ -786,7 +825,11 @@ class UmbraApp(ctk.CTk):
         for target in targets:
             if not os.path.exists(target): continue
             anon_path, orig_path = self._resolve_deanon_pair(target)
-            if not anon_path and orig_path is None and ' [ANON]' not in target and ' [ОТВЕТ]' not in target and len(targets) == 1:
+            # Метки ищем в ИМЕНИ файла, а не в полном пути: папка вида
+            # 'C:\\Мои [ANON] дела\\' иначе выдавала бы себя за помеченный файл
+            # и спрашивать ответ ИИ мы бы перестали.
+            if (not anon_path and orig_path is None and len(targets) == 1
+                    and not naming.has_any_marker(Path(target).stem)):
                 from tkinter import filedialog
                 picked = filedialog.askopenfilename(title="Выберите файл с ответом ИИ", initialdir=os.path.dirname(target), filetypes=[("Безопасный ответ ИИ", "*.md *.docx *.xlsx *.txt"), ("Все файлы", "*.*")])
                 if picked:
@@ -819,6 +862,7 @@ class UmbraApp(ctk.CTk):
         success_count = 0
         errors = []
         notices = []
+        restored = []
         for i, (anon_path, orig_path) in enumerate(pairs):
             self._ui(lambda idx=i: self.progress_bar.set(idx / total))
             self._ui(lambda fname=os.path.basename(anon_path): self.set_status(f"Восстановление {fname}...", color=ACCENT_TEXT))
@@ -850,6 +894,10 @@ class UmbraApp(ctk.CTk):
                 if out_path:
                     self.last_out_path = out_path
                     success_count += 1
+                    # Оба контракта возврата (кортеж и MdDeanonSession.save)
+                    # сходятся здесь, и здесь результат ТОЧНО уже на диске —
+                    # единственная безопасная точка, чтобы наметить уборку.
+                    restored.append((orig_path, out_path, anon_path))
                 if stats.get('unresolved'):
                     notices.append(
                         f"{os.path.basename(anon_path)}: не восстановлено меток — "
@@ -862,10 +910,23 @@ class UmbraApp(ctk.CTk):
             except Exception as exc:
                 errors.append((os.path.basename(anon_path), str(exc)))
 
+        # Уборка — только ПОСЛЕ всего цикла и только по успешным парам. Внутри
+        # цикла было бы нельзя: два ответа ИИ на один оригинал — обычное дело, а
+        # удаление паспорта после первой пары обрубило бы вторую на полпути.
+        removed = 0
+        if self.cleanup_callback:
+            for orig_path, out_path, answer_path in restored:
+                try:
+                    removed += len(self.cleanup_callback(orig_path, out_path, answer_path))
+                except Exception:
+                    pass    # уборка не должна рушить уже успешное восстановление
+
         try:
             if success_count > 0:
                 self._ui(lambda: self.progress_bar.set(1.0))
                 msg = f"Успешно восстановлено файлов: {success_count} из {total}."
+                if removed:
+                    msg += f" Убрано промежуточных файлов: {removed}."
                 if errors:
                     msg += "\nОшибки: " + "; ".join(f"{name} — {error}" for name, error in errors[:3])
                 if notices:

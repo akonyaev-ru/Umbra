@@ -141,14 +141,17 @@ def write_manifest(output_path: str, original_path: str, options: dict) -> str:
     return manifest_path
 
 
-def load_matching_manifest(original_path: str) -> dict:
-    """Find the newest valid sidecar bound to this unchanged original."""
+def find_matching_manifests(original_path: str) -> list:
+    """Все паспорта, привязанные к этому НЕИЗМЕНЁННОМУ оригиналу: [(path, data)],
+    новые первыми. Пустой список — привязанных паспортов нет."""
     original_path = os.path.abspath(original_path)
     expected_hash = sha256_file(original_path)
-    stem = Path(original_path).stem
+    # Имя паспорта НЕ фильтруем: привязка к оригиналу проверяется ниже по
+    # содержимому (original_name + original_sha256), а имя как ключ — хрупко.
+    # Фильтр по "<stem> [ANON]" ломался от любой смены схемы имён и выдавал
+    # «Не найден паспорт», что читается как подмена оригинала, а не как баг имён.
     candidates = sorted(
-        (path for path in Path(original_path).parent.glob("*.umbra.json")
-         if path.name.startswith(f"{stem} [ANON]")),
+        Path(original_path).parent.glob("*.umbra.json"),
         key=lambda p: p.stat().st_mtime_ns,
         reverse=True,
     )
@@ -168,6 +171,12 @@ def load_matching_manifest(original_path: str) -> dict:
             and isinstance(data.get("options"), dict)
         ):
             valid.append((candidate, data))
+    return valid
+
+
+def load_matching_manifest(original_path: str) -> dict:
+    """Find the newest valid sidecar bound to this unchanged original."""
+    valid = find_matching_manifests(original_path)
     if not valid:
         raise ValueError(
             "Не найден паспорт обезличивания для неизменённого оригинала. "

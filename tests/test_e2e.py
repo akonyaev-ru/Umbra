@@ -14,6 +14,15 @@ from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
+import naming
+
+FIXTURES = Path(__file__).parent / 'fixtures'
+
+
+def copy_pdf_fixture(tmp_path, name='Договор.pdf'):
+    target = tmp_path / name
+    shutil.copy(FIXTURES / 'contract_ru.pdf', target)
+    return target
 
 def create_test_docx(path):
     doc = Document()
@@ -280,7 +289,11 @@ def test_ner_failure_stops_anonymization(tmp_path, monkeypatch):
     monkeypatch.setattr(nlp, '_ner_markup', broken)
     with pytest.raises(RuntimeError, match='NER unavailable'):
         proc.process_file(str(source))
-    assert not (tmp_path / 'person [ANON].txt').exists()
+    # Проверяем ИНВАРИАНТ, а не конкретное имя: при падении NER рядом не должно
+    # остаться ничего, кроме оригинала. Прежний assert был прибит к имени
+    # 'person [ANON].txt' и после перехода на префиксы стал бы истинным всегда —
+    # тест бы «зеленел», перестав охранять fail-closed (полуфабрикат с ПДн).
+    assert [p.name for p in tmp_path.iterdir()] == ['person.txt']
 
 
 def test_existing_output_is_not_overwritten(tmp_path):
@@ -341,6 +354,122 @@ def test_copy_result_does_not_fake_success(tmp_path, monkeypatch):
     unknown = tmp_path / 'result.bin'   # формат без извлекаемого текста
     unknown.write_bytes(b'binary')
     assert clipboard_util.copy_result(str(unknown), tk_master=None) is False
+
+
+def test_markers_are_prefixes_not_suffixes(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'Договор.txt'
+    source.write_text('Иванов Иван Иванович', encoding='utf-8')
+    out = Path(proc.process_file(str(source)))
+    assert out.name == '[ANON] Договор.txt'
+
+
+def test_pdf_becomes_docx_and_keeps_tables(tmp_path):
+    """PDF конвертируется в документ, а не в простыню текста."""
+    os.chdir(str(src_dir))
+    source = copy_pdf_fixture(tmp_path)
+    proc = DocumentProcessor(NLPProcessor())
+    out = Path(proc.process_file(str(source)))
+
+    assert out.name == '[ANON] Договор.docx'
+    doc = Document(str(out))
+    assert len(doc.tables) == 1
+    assert [c.text for c in doc.tables[0].rows[0].cells] == [
+        'Услуга', 'Стоимость', 'Исполнитель']
+
+
+def test_pdf_name_split_across_lines_is_anonymized(tmp_path):
+    """ФИО, разорванное переносом строки, обязано быть найдено.
+
+    Это безопасность, а не косметика: при построчном обходе NER не видел
+    'Иванова Ивана\\nИвановича' целиком, и ПДн уходили в ИИ открытыми."""
+    os.chdir(str(src_dir))
+    source = copy_pdf_fixture(tmp_path)
+    proc = DocumentProcessor(NLPProcessor())
+    out = proc.process_file(str(source))
+    text = '\n'.join(p.text for p in Document(out).paragraphs)
+
+    assert 'Иванова' not in text
+    assert 'Ивановича' not in text
+    assert '[ФИО_1]' in text
+
+
+def test_pdf_roundtrip_restores_original_data(tmp_path):
+    """Карта меток обязана совпасть между анонимизацией и восстановлением:
+    обход PDF в обоих сценариях один и тот же."""
+    os.chdir(str(src_dir))
+    source = copy_pdf_fixture(tmp_path)
+    proc = DocumentProcessor(NLPProcessor())
+    anon = proc.process_file(str(source))
+    answer = tmp_path / naming.build_name('Договор', naming.ANSWER, '.docx')
+    shutil.copy(anon, answer)
+
+    out, stats = proc.deanonymize_file(str(answer), str(source))
+    assert stats['unresolved'] == 0
+    text = '\n'.join(p.text for p in Document(out).paragraphs)
+    assert 'Иванова Ивана Ивановича' in text
+    assert '+7 999 123-45-67' in text
+    restored_table = [c.text for c in Document(out).tables[0].rows[1].cells]
+    assert restored_table == ['Разработка ПО', '150 000,00', 'Сидоров С.С.']
+
+
+def test_result_lands_next_to_original_not_next_to_answer(tmp_path):
+    """Ответ ИИ обычно приезжает в Загрузки. Итог всё равно кладём рядом с
+    оригиналом, иначе обещание «в папке дела оригинал + [UMBRA]» ложно."""
+    os.chdir(str(src_dir))
+    case = tmp_path / 'дело'
+    case.mkdir()
+    downloads = tmp_path / 'downloads'
+    downloads.mkdir()
+    source = case / 'Договор.txt'
+    source.write_text('Иванов Иван Иванович', encoding='utf-8')
+
+    proc = DocumentProcessor(NLPProcessor())
+    anon = proc.process_file(str(source))
+    answer = downloads / naming.build_name('Договор', naming.ANSWER, '.txt')
+    shutil.copy(anon, answer)
+
+    out, _stats = proc.deanonymize_file(str(answer), str(source))
+    assert Path(out).parent == case
+    assert Path(out).name == '[UMBRA] Договор.txt'
+
+
+def test_cleanup_leaves_only_original_and_result(tmp_path):
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'Договор.txt'
+    source.write_text('Иванов Иван Иванович, тел. +7 999 123-45-67', encoding='utf-8')
+
+    anon = proc.process_file(str(source))
+    proc.process_file(str(source))      # второй прогон: ещё [ANON]-файл и паспорт
+    answer = tmp_path / naming.build_name('Договор', naming.ANSWER, '.txt')
+    shutil.copy(anon, answer)
+    out, _stats = proc.deanonymize_file(str(answer), str(source))
+
+    proc.cleanup_intermediates(str(source), out, str(answer))
+    assert {p.name for p in tmp_path.iterdir()} == {
+        'Договор.txt', '[UMBRA] Договор.txt'}
+    # Уборка не должна трогать сам результат.
+    assert 'Иванов Иван Иванович' in Path(out).read_text(encoding='utf-8')
+
+
+def test_cleanup_never_runs_before_result_exists(tmp_path):
+    """Ответ ИИ невосполним локально: пока результата нет на диске, удалять
+    ничего нельзя. Проверяем, что упавшее восстановление не съело ответ."""
+    os.chdir(str(src_dir))
+    proc = DocumentProcessor(NLPProcessor())
+    source = tmp_path / 'Договор.txt'
+    source.write_text('Иванов Иван Иванович', encoding='utf-8')
+    anon = proc.process_file(str(source))
+    answer = tmp_path / naming.build_name('Договор', naming.ANSWER, '.txt')
+    shutil.copy(anon, answer)
+
+    # Оригинал подменили — паспорт больше не подходит, восстановление падает.
+    source.write_text('Совсем другой текст', encoding='utf-8')
+    with pytest.raises(ValueError, match='паспорт'):
+        proc.deanonymize_file(str(answer), str(source))
+    assert answer.exists()
 
 
 if __name__ == '__main__':

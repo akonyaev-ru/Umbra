@@ -23,9 +23,16 @@ def deanonymize_wrapper(new_path, source_path):
     proc = get_doc_proc()
     return proc.deanonymize_file(new_path, source_path)
 
+def cleanup_wrapper(source_path, out_path, answer_path=None):
+    # Уборка промежуточных файлов. Вызывается GUI только после того, как
+    # результат сохранён на диск (см. _deanon_thread).
+    proc = get_doc_proc()
+    return proc.cleanup_intermediates(source_path, out_path, answer_path)
+
 def main():
     app = UmbraApp(process_callback=process_file_wrapper,
-                   deanon_callback=deanonymize_wrapper)
+                   deanon_callback=deanonymize_wrapper,
+                   cleanup_callback=cleanup_wrapper)
     app.mainloop()
 
 if __name__ == "__main__":

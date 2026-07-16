@@ -8,11 +8,13 @@ from docx.opc.oxml import serialize_part_xml
 from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
+import naming
 from nlp_engine import NLPProcessor, PlaceholderMapper, TAG_PER
 from security_utils import (
     MAX_XLSX_CELLS,
     atomic_output,
     check_input_file,
+    find_matching_manifests,
     load_matching_manifest,
     scrub_extended_properties,
     unique_output_path,
@@ -30,15 +32,15 @@ class DocumentProcessor:
     # ------------------------------------------------------------------ #
     def process_file(self, file_path, hide_names=True, hide_locations=True,
                      hide_orgs=True, hide_dates=False, smart_contract_mode=False, export_md=False):
-        """Анонимизирует .txt/.docx, сохраняет '<имя> [ANON].<ext>' рядом.
+        """Анонимизирует документ, сохраняет '[ANON] <имя>.<ext>' рядом.
 
         Дефолт smart_contract_mode=False намеренно совпадает с deanonymize_file и
         с тем, что всегда шлёт UI (§10.1): универсальный режим скрывает всё.
         Иначе карта, построенная при восстановлении из оригинала (там режим
         False), не совпала бы с анонимизацией в режиме True → рассинхрон меток.
 
-        export_md=True (только .docx): вместо [ANON].docx создаётся [ANON].md —
-        markdown для отправки ИИ (лучше читается моделями). Возвращает путь.
+        export_md=True (только .docx): вместо '[ANON] <имя>.docx' создаётся
+        '[ANON] <имя>.md' — markdown для ИИ (модели читают его лучше). Возвращает путь.
         Восстановление идёт из оригинала (отдельный файл-ключ не создаётся)."""
         file_path = os.path.abspath(file_path)
         file_dir, file_name = os.path.split(file_path)
@@ -59,13 +61,20 @@ class DocumentProcessor:
             validate_ooxml(file_path, 'xlsx', reject_formulas=True)
         self.nlp.clear_ner_cache()
 
-        # HTML/CSV/PDF intentionally leave the active container and become inert
+        # HTML/CSV intentionally leave the active container and become inert
         # UTF-8 text.  This prevents hidden attributes and spreadsheet formula
         # injection from crossing the anonymisation boundary.
+        #
+        # PDF даёт .docx: юристу нужен документ, а не простыня текста. Барьер
+        # при этом не слабее — мы не конвертируем контейнер, а СОБИРАЕМ НОВЫЙ
+        # .docx из извлечённых текста и таблиц, поэтому ничего активного
+        # (ссылки, вложения, JS-действия PDF) через границу не переезжает.
         out_ext = '.md' if export_md and ext == '.docx' else (
-            '.txt' if ext in {'.pdf', '.csv', '.html'} else ext
+            '.docx' if ext == '.pdf' else
+            '.txt' if ext in {'.csv', '.html'} else ext
         )
-        out_path = unique_output_path(os.path.join(file_dir, f"{name} [ANON]{out_ext}"))
+        out_path = unique_output_path(
+            os.path.join(file_dir, naming.build_name(name, naming.ANON, out_ext)))
         options = {
             'hide_names': hide_names,
             'hide_locations': hide_locations,
@@ -110,21 +119,70 @@ class DocumentProcessor:
             raise
         return out_path
 
-    def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
-        """PDF → извлечённый текст → анонимизация → '[ANON].txt'. Скан без
-        текстового слоя — понятная ошибка."""
+    def _anonymize_pdf(self, in_path, mapper, hide_names, hide_locations, hide_orgs,
+                       hide_dates, smart_contract_mode):
+        """PDF → блоки → анонимизация. ЕДИНСТВЕННЫЙ обход PDF в проекте.
+
+        Звать обязаны оба сценария — и анонимизация (_process_pdf), и построение
+        карты при восстановлении (_load_mapping). PlaceholderMapper нумерует
+        метки в порядке встречи ([ФИО_1], [ФИО_2], ...), поэтому две независимые
+        ветки обхода при малейшем расхождении тихо ломали бы восстановление:
+        ошибки нет, а данные подставлены не те. Раньше веток было именно две.
+
+        Скан без текстового слоя — понятная ошибка."""
         import pdf_reader
-        lines = pdf_reader.extract_lines(in_path)
-        if not any(l.strip() for l in lines):
+        blocks = pdf_reader.extract_blocks(in_path)
+        texts = pdf_reader.block_texts(blocks)
+        if not any(text.strip() for text in texts):
             raise ValueError('В PDF нет текстового слоя (похоже на скан). Нужен PDF '
                              'с распознанным текстом или сначала прогоните OCR.')
+        anonymized = self._anonymize_lines(texts, mapper, hide_names, hide_locations,
+                                           hide_orgs, hide_dates, smart_contract_mode)
+        return self._fill_pdf_blocks(blocks, anonymized)
+
+    @staticmethod
+    def _fill_pdf_blocks(blocks, texts):
+        """Раскладывает обезличенные тексты обратно по блокам. Обход строго тот
+        же, что в pdf_reader.block_texts, — порядок совпадает по построению."""
+        stream = iter(texts)
+        out = []
+        for block in blocks:
+            if block['type'] == 'table':
+                out.append({'type': 'table',
+                            'rows': [[next(stream) for _cell in row]
+                                     for row in block['rows']]})
+            else:
+                out.append({'type': 'paragraph', 'text': next(stream)})
+        return out
+
+    def _process_pdf(self, in_path, out_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
+        """PDF → абзацы и таблицы → анонимизация → '[ANON] <имя>.docx'."""
         mapper = PlaceholderMapper()
-        lines_nl = [l + '\n' for l in lines]
-        out_lines = self._anonymize_lines(lines_nl, mapper, hide_names, hide_locations,
-                                          hide_orgs, hide_dates, smart_contract_mode)
-        with open(out_path, 'w', encoding='utf-8') as f:
-            f.writelines(out_lines)
+        blocks = self._anonymize_pdf(in_path, mapper, hide_names, hide_locations,
+                                     hide_orgs, hide_dates, smart_contract_mode)
+        self._write_pdf_docx(blocks, out_path)
         return mapper
+
+    @staticmethod
+    def _write_pdf_docx(blocks, out_path):
+        """Собирает .docx из обезличенных блоков — новый документ с нуля."""
+        doc = Document()
+        for block in blocks:
+            if block['type'] == 'table':
+                rows = block['rows']
+                width = max(len(row) for row in rows)
+                table = doc.add_table(rows=len(rows), cols=width)
+                table.style = 'Table Grid'
+                for row_index, row in enumerate(rows):
+                    for cell_index, value in enumerate(row):
+                        table.cell(row_index, cell_index).text = value
+                doc.add_paragraph()
+            else:
+                doc.add_paragraph(block['text'])
+        doc.save(out_path)
+        # Шаблон python-docx приносит свои core/app-свойства (автор, компания).
+        # Чистим их так же, как у остальных .docx на выходе.
+        scrub_extended_properties(out_path)
 
     # ------------------------------------------------------------------ #
     #  Markdown-контур (экспорт для ИИ)                                    #
@@ -543,7 +601,8 @@ class DocumentProcessor:
                          hide_orgs=True, hide_dates=False, smart_contract_mode=False):
         """Восстанавливает данные в 'new_path' (документ от ИИ с метками).
         source_path — исходный документ, привязанный паспортом *.umbra.json.
-        Сохраняет '<имя> [DEANON].<ext>'. Возвращает (out_path, stats), где
+        Сохраняет '[UMBRA] <имя>.<ext>' РЯДОМ С ОРИГИНАЛОМ (а не с ответом ИИ:
+        тот обычно лежит в Загрузках). Возвращает (out_path, stats), где
         stats = {'restored': int, 'unresolved': int, 'samples': [...]}."""
         new_path = os.path.abspath(new_path)
         source_path = os.path.abspath(source_path)
@@ -580,12 +639,12 @@ class DocumentProcessor:
         if not mapping:
             raise ValueError("Карта замен пуста — нечего восстанавливать.")
 
-        file_dir, file_name = os.path.split(new_path)
-        name, ext = os.path.splitext(file_name)
-        # Убираем возможные суффиксы [ANON]/[ОТВЕТ], чтобы имя было аккуратным.
-        clean = name.replace(' [ANON]', '').replace(' [ОТВЕТ]', '')
+        name, ext = os.path.splitext(os.path.basename(new_path))
         out_ext = '.txt' if ext.lower() == '.md' and source_ext != '.docx' else ext
-        out_path = unique_output_path(os.path.join(file_dir, f"{clean} [DEANON]{out_ext}"))
+        # Результат кладём рядом с ОРИГИНАЛОМ, а не рядом с ответом ИИ: ответ
+        # обычно приезжает в Загрузки, и итог терялся бы там же, вдали от дела.
+        out_path = unique_output_path(os.path.join(
+            os.path.dirname(source_path), naming.build_name(name, naming.RESULT, out_ext)))
 
         tol_re = self._build_tolerant_re(mapping)
         if ext.lower() == '.md':
@@ -607,6 +666,47 @@ class DocumentProcessor:
             else:
                 stats = self._deanon_xlsx(new_path, temporary, mapping, tol_re)
         return out_path, stats
+
+    def cleanup_intermediates(self, source_path, out_path, answer_path=None):
+        """Убирает всё, кроме оригинала и '[UMBRA] <имя>': паспорта *.umbra.json,
+        [ANON]-файлы и ответ ИИ. Возвращает список удалённых путей.
+
+        Звать ТОЛЬКО после того, как результат уже лежит на диске: ответ ИИ
+        локально невоспроизводим, и падение на середине съело бы его безвозвратно.
+
+        Удаляем строго по ИЗВЕСТНЫМ путям — из паспортов, привязанных к этому
+        оригиналу по хешу. Маска вроде '*[ANON]*' захватила бы и '[ANON] Договор
+        (2).md' от прошлых прогонов, и файлы соседних дел в той же папке.
+        """
+        source_path = os.path.abspath(source_path)
+        out_path = os.path.abspath(out_path)
+        folder = os.path.dirname(source_path)
+
+        doomed = []
+        for manifest_path, data in find_matching_manifests(source_path):
+            doomed.append(str(manifest_path))
+            output_name = data.get('output_name')
+            if output_name:
+                # basename: в паспорте лежит имя, а не путь — join с чужой
+                # папкой дал бы промах, а с подделанным именем — выход наружу.
+                doomed.append(os.path.join(folder, os.path.basename(output_name)))
+        if answer_path:
+            doomed.append(os.path.abspath(answer_path))
+
+        keep = {source_path, out_path}
+        removed = []
+        for path in doomed:
+            path = os.path.abspath(path)
+            if path in keep or not os.path.isfile(path):
+                continue
+            try:
+                os.remove(path)
+                removed.append(path)
+            except OSError:
+                # Файл занят Word'ом или защищён — не повод рушить успешное
+                # восстановление: результат уже сохранён, это только уборка.
+                pass
+        return removed
 
     # ------------------------------------------------------------------ #
     #  Markdown-контур (восстановление .docx из ответа ИИ)                #
@@ -758,9 +858,9 @@ class DocumentProcessor:
         notices.extend(warnings)
         stats['notices'] = notices
 
-        file_dir, file_name = os.path.split(ai_md_path)
-        clean = os.path.splitext(file_name)[0].replace(' [ANON]', '').replace(' [ОТВЕТ]', '')
-        out_path = unique_output_path(os.path.join(file_dir, f"{clean} [DEANON].docx"))
+        name = os.path.splitext(os.path.basename(ai_md_path))[0]
+        out_path = unique_output_path(os.path.join(
+            os.path.dirname(source_path), naming.build_name(name, naming.RESULT, '.docx')))
 
         return MdDeanonSession(doc, notes, out_path, stats, deletions)
 
@@ -794,9 +894,10 @@ class DocumentProcessor:
             lines = self._read_text_lines(source_path)
             self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
         elif ext == '.pdf':
-            import pdf_reader
-            lines = [l + '\n' for l in pdf_reader.extract_lines(source_path)]
-            self._anonymize_lines(lines, mapper, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode)
+            # Тот же обход, что при анонимизации, — иначе метки пронумеруются
+            # иначе и данные восстановятся не на свои места.
+            self._anonymize_pdf(source_path, mapper, hide_names, hide_locations,
+                                hide_orgs, hide_dates, smart_contract_mode)
         elif ext in ('.xlsx', '.csv', '.html'):
             # Эти форматы обезличиваются функциями, которые СРАЗУ пишут файл, а нам
             # нужна только карта. Пишем во временный файл и удаляем его: карта
@@ -1094,7 +1195,7 @@ class MdDeanonSession:
     def save(self, confirmed_deletions=None):
         """Применяет автоудаления (склейка абзацев — безопасны по построению:
         второй абзац удаляется, только если его метки перенесены в первый),
-        включает обновление полей Word и сохраняет [DEANON].docx. Возвращает путь."""
+        включает обновление полей Word и сохраняет '[UMBRA] <имя>.docx'. Возвращает путь."""
         import md_merge
         md_merge.apply_deletions(self.deletions, confirmed_deletions)
         if self.notes is not None:

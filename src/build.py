@@ -32,12 +32,12 @@ def build():
         cmd.extend(["--icon=icon_purple.ico", "--version-file=version_info.txt"])
 
     external_modules = [
-        "customtkinter", "PIL", "psutil", "docx", "razdel", "navec", "slovnet", "markdown_it",
-        "pypdf", "tkinter.messagebox", "tkinter.filedialog"
+        "customtkinter", "PIL", "docx", "razdel", "navec", "slovnet", "markdown_it",
+        "pypdf", "pdfplumber", "tkinter.messagebox", "tkinter.filedialog"
     ]
     if sys.platform == 'win32':
         external_modules.extend([
-            "pythoncom", "win32com", "win32com.client", "win32clipboard"
+            "win32clipboard", "windnd"
         ])
     for mod in external_modules:
         cmd.append(f"--hidden-import={mod}")
