@@ -3,12 +3,17 @@ from gui import UmbraApp
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
 
-# Настройка глобального логгера
+import tempfile
+import os
+
+log_path = os.path.join(tempfile.gettempdir(), 'umbra.log')
+
+# Настройка глобального логгера (файл создастся только при реальной записи ошибки)
 logging.basicConfig(
-    filename='umbra.log',
     level=logging.WARNING,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[logging.FileHandler(log_path, delay=True)]
 )
 
 doc_proc_instance = None
