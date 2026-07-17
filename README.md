@@ -1,7 +1,7 @@
 # 🛡️ Umbra
 
 ![Python](https://img.shields.io/badge/python-3.12-blue)
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Build](https://github.com/akonyaev-ru/Umbra/actions/workflows/build.yml/badge.svg)
 
@@ -55,3 +55,16 @@
    python build.py
    ```
 3. Готовый `Umbra.exe` (или аналог для вашей ОС) появится в корневой папке проекта.
+
+---
+
+## 📄 Лицензия
+
+Copyright (c) 2026 Алексей Коняев (Aleksey Konyaev)
+
+Umbra распространяется под лицензией **GNU AGPL v3** (см. файл [`LICENSE`](LICENSE)).
+Причина именно AGPL: программа использует библиотеку **PyMuPDF** для физической
+закраски PDF, а PyMuPDF лицензирована под AGPL — она обязывает всю поставку быть
+под совместимой открытой лицензией. Исходники Umbra и так открыты, поэтому AGPL v3
+приводит формальную лицензию в соответствие с фактическим положением дел.
+
