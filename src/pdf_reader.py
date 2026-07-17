@@ -158,6 +158,8 @@ def extract_blocks(path):
         try:
             ok = reader.decrypt('')
         except Exception:
+            import logging
+            logging.warning("Failed to decrypt PDF with empty password", exc_info=True)
             ok = False
         if not ok:
             raise ValueError('PDF защищён паролем — снимите защиту и повторите.')
@@ -169,6 +171,8 @@ def extract_blocks(path):
             try:
                 blocks.extend(_page_blocks(page))
             except Exception:
+                import logging
+                logging.error(f"Failed to extract blocks from page {page_number}", exc_info=True)
                 failed_pages.append(page_number)
             finally:
                 # Иначе pdfplumber держит разобранную раскладку всех страниц
@@ -176,7 +180,8 @@ def extract_blocks(path):
                 try:
                     page.flush_cache()
                 except Exception:
-                    pass
+                    import logging
+                    logging.warning("Failed to flush page cache", exc_info=True)
     if failed_pages:
         preview = ', '.join(map(str, failed_pages[:10]))
         more = '…' if len(failed_pages) > 10 else ''

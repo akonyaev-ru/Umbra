@@ -289,7 +289,8 @@ class NumberingResolver:
                     lv = _safe_int(ilvl.val) if ilvl is not None else 0
                     return str(num_id.val), (lv if lv is not None else 0)
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to extract numPr from paragraph", exc_info=True)
         try:
             style = paragraph.style
             while style is not None:
@@ -304,7 +305,8 @@ class NumberingResolver:
                                     int(ilv.get(qn('w:val'))) if ilv is not None else 0)
                 style = style.base_style
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to extract numPr from style", exc_info=True)
         return None, None
 
     def resolve(self, paragraph):
@@ -369,7 +371,8 @@ def _heading_level(paragraph):
                 return lvl if 1 <= lvl <= 6 else None
             style = style.base_style
     except Exception:
-        pass
+        import logging
+        logging.warning("Failed to extract outlineLvl from style", exc_info=True)
     return None
 
 

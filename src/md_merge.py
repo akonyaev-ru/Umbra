@@ -159,11 +159,13 @@ def parse_ai_blocks(text, known_labels):
     try:
         md.disable(['reference'])
     except Exception:
-        pass
+        import logging
+        logging.warning("Failed to disable reference parsing in markdown-it", exc_info=True)
     try:
         md.disable(['code'])
     except Exception:
-        pass
+        import logging
+        logging.warning("Failed to disable code parsing in markdown-it", exc_info=True)
 
     tokens = md.parse(prot)
     blocks = []

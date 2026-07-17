@@ -1,6 +1,15 @@
+import logging
 from gui import UmbraApp
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
+
+# Настройка глобального логгера
+logging.basicConfig(
+    filename='umbra.log',
+    level=logging.WARNING,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 doc_proc_instance = None
 

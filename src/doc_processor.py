@@ -1225,7 +1225,8 @@ class MdDeanonSession:
                     'wordprocessingml/2006/main" w:val="true"/>')
                 settings.append(upd)
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to update docx fields in settings", exc_info=True)
         with atomic_output(self.out_path) as temporary:
             self.doc.save(temporary)
             scrub_extended_properties(temporary)

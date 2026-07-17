@@ -83,7 +83,8 @@ try:
     myappid = 'com.antigravity.umbra.v1'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 except Exception:
-    pass
+    import logging
+    logging.warning("Failed to set AppID", exc_info=True)
 
 # Следуем системной теме Windows (светлая/тёмная).
 ctk.set_appearance_mode("System")
@@ -93,7 +94,7 @@ ctk.set_default_color_theme("green")
 def get_resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
-    except Exception:
+    except AttributeError:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
@@ -116,7 +117,8 @@ try:
     _FR_PRIVATE = 0x10
     _gdi32.AddFontResourceExW(get_resource_path('Audiowide-Regular.ttf'), _FR_PRIVATE, None)
 except Exception:
-    pass
+    import logging
+    logging.warning("Failed to load custom font", exc_info=True)
 
 
 # --- Палитра (кортежи (светлая, тёмная) — CustomTkinter сам выбирает по теме) ---
@@ -215,7 +217,8 @@ class UmbraApp(ctk.CTk):
         try:
             self.iconbitmap(get_resource_path('icon_purple.ico'))
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to load window icon", exc_info=True)
         self.after(200, self._apply_crisp_icon)
 
         self.grid_columnconfigure(0, weight=1)
@@ -235,7 +238,8 @@ class UmbraApp(ctk.CTk):
             self.logo_label = ctk.CTkLabel(self.header_frame, image=self.logo_ctk, text="")
             self.logo_label.grid(row=0, column=0, rowspan=2, padx=(0, 16))
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to load logo", exc_info=True)
 
         # Разрядка заголовка — ТОНКИМИ пробелами U+2009 (уже обычного): буквы
         # ближе друг к другу, но вордмарк остаётся разреженным. Записаны
@@ -539,7 +543,8 @@ class UmbraApp(ctk.CTk):
         try:
             window.iconbitmap(icon_path)
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to set window iconbitmap", exc_info=True)
 
         if not (sys.platform == 'win32' and os.path.exists(icon_path)):
             return
@@ -594,7 +599,8 @@ class UmbraApp(ctk.CTk):
                 if hicon_small:
                     user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to send WM_SETICON message", exc_info=True)
 
     def select_file(self, path):
         if self.is_processing:
@@ -717,6 +723,8 @@ class UmbraApp(ctk.CTk):
             else:
                 subprocess.Popen(['xdg-open', os.path.dirname(path)])
         except Exception:
+            import logging
+            logging.error("Failed to open file path", exc_info=True)
             if sys.platform == 'win32':
                 os.startfile(os.path.dirname(path))
 
@@ -985,7 +993,8 @@ class UmbraApp(ctk.CTk):
                 try:
                     removed += len(self.cleanup_callback(orig_path, out_path, answer_path))
                 except Exception:
-                    pass    # уборка не должна рушить уже успешное восстановление
+                    import logging
+                    logging.warning("Cleanup failed during deanon", exc_info=True)
 
         try:
             if success_count > 0:
@@ -1059,7 +1068,8 @@ class UmbraApp(ctk.CTk):
         try:
             self.after(0, func)
         except Exception:
-            pass
+            import logging
+            logging.warning("Failed to dispatch UI call to main thread", exc_info=True)
 
     def _process_thread(self, file_paths, opts):
         total = len(file_paths)
