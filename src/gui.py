@@ -16,6 +16,7 @@ def safe_hook_dropfiles(tkwindow, drop_func):
     from ctypes import wintypes
     
     hwnd = tkwindow.winfo_id()
+    
     is_64bit = sys.maxsize > 2**32
     
     GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW if is_64bit else ctypes.windll.user32.GetWindowLongW
@@ -27,8 +28,11 @@ def safe_hook_dropfiles(tkwindow, drop_func):
     SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
     SetWindowLong.restype = ctypes.c_void_p
     
+    WPARAM_T = ctypes.c_ulonglong if is_64bit else ctypes.c_ulong
+    LPARAM_T = ctypes.c_longlong if is_64bit else ctypes.c_long
+
     CallWindowProc = ctypes.windll.user32.CallWindowProcW
-    CallWindowProc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    CallWindowProc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, WPARAM_T, LPARAM_T]
     CallWindowProc.restype = ctypes.c_void_p
     
     WM_DROPFILES = 0x0233
@@ -46,26 +50,44 @@ def safe_hook_dropfiles(tkwindow, drop_func):
     DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
     DragAcceptFiles.restype = None
     
-    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_void_p, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_void_p, wintypes.HWND, wintypes.UINT, WPARAM_T, LPARAM_T)
     
     old_wndproc = GetWindowLong(hwnd, GWLP_WNDPROC)
     
     def py_wndproc(h, msg, wp, lp):
-        if msg == WM_DROPFILES:
-            hdrop = wintypes.HDROP(wp)
-            count = DragQueryFile(hdrop, 0xFFFFFFFF, None, 0)
-            files = []
-            for i in range(count):
-                length = DragQueryFile(hdrop, i, None, 0)
-                buf = ctypes.create_unicode_buffer(length + 1)
-                DragQueryFile(hdrop, i, buf, length + 1)
-                files.append(buf.value)
-            DragFinish(hdrop)
-            drop_func(files)
-            return 0
-        return CallWindowProc(old_wndproc, h, msg, wp, lp)
+        try:
+            if msg == WM_DROPFILES:
+                hdrop = wintypes.HDROP(wp)
+                count = DragQueryFile(hdrop, 0xFFFFFFFF, None, 0)
+                files = []
+                for i in range(count):
+                    length = DragQueryFile(hdrop, i, None, 0)
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    DragQueryFile(hdrop, i, buf, length + 1)
+                    files.append(buf.value)
+                DragFinish(hdrop)
+                tkwindow._dropped_files = files
+                tkwindow.event_generate("<<DropFiles>>", when="tail")
+                return 0
+        except Exception as e:
+            print(f"DnD Hook Error: {e}", file=sys.stderr)
+        
+        return CallWindowProc(ctypes.c_void_p(old_wndproc), wintypes.HWND(h), wintypes.UINT(msg), WPARAM_T(wp), LPARAM_T(lp))
     
+    tkwindow.bind("<<DropFiles>>", lambda e: drop_func(tkwindow._dropped_files))
     tkwindow._drop_wndproc = WNDPROC(py_wndproc)
+    
+    # Разрешаем прохождение сообщений DnD даже если приложение запущено от имени Администратора (UIPI)
+    try:
+        ChangeWindowMessageFilterEx = ctypes.windll.user32.ChangeWindowMessageFilterEx
+        ChangeWindowMessageFilterEx.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD, ctypes.c_void_p]
+        ChangeWindowMessageFilterEx.restype = wintypes.BOOL
+        MSGFLT_ALLOW = 1
+        ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, None)
+        ChangeWindowMessageFilterEx(hwnd, 0x0049, MSGFLT_ALLOW, None) # WM_COPYGLOBALDATA
+    except AttributeError:
+        pass # Windows older than 7
+
     DragAcceptFiles(hwnd, True)
     SetWindowLong(hwnd, GWLP_WNDPROC, ctypes.cast(tkwindow._drop_wndproc, ctypes.c_void_p))
 
