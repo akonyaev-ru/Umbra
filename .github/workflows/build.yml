@@ -197,7 +197,6 @@ jobs:
           # Linux
           tar -xzf Umbra-Linux.tar.gz
           zip -r -y Umbra-Linux.zip Umbra-Linux/
-          sha256sum Umbra-Windows.zip Umbra-macOS.zip Umbra-Linux.zip > SHA256SUMS.txt
 
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
@@ -208,6 +207,5 @@ jobs:
             Umbra-Windows.zip
             Umbra-macOS.zip
             Umbra-Linux.zip
-            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
