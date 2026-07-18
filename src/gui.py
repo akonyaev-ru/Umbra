@@ -211,7 +211,7 @@ class UmbraApp(TkinterDnD_CTk):
         self.header_switch_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         self.header_switch_frame.grid(row=0, column=2, rowspan=2, sticky="e")
 
-        self.md_mode = ctk.BooleanVar(value=True)
+        self.md_mode = ctk.BooleanVar(value=False)
         self.md_switch = ctk.CTkSwitch(
             self.header_switch_frame,
             text="",
