@@ -6,97 +6,23 @@ import webbrowser
 import json
 from pathlib import Path
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from PIL import Image
 import naming
-def safe_hook_dropfiles(tkwindow, drop_func):
-    if sys.platform != 'win32':
-        return
-    import ctypes
-    from ctypes import wintypes
-    
-    hwnd = tkwindow.winfo_id()
-    
-    is_64bit = sys.maxsize > 2**32
-    
-    GetWindowLong = ctypes.windll.user32.GetWindowLongPtrW if is_64bit else ctypes.windll.user32.GetWindowLongW
-    SetWindowLong = ctypes.windll.user32.SetWindowLongPtrW if is_64bit else ctypes.windll.user32.SetWindowLongW
-    
-    GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
-    GetWindowLong.restype = ctypes.c_void_p
-    
-    SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
-    SetWindowLong.restype = ctypes.c_void_p
-    
-    WPARAM_T = ctypes.c_ulonglong if is_64bit else ctypes.c_ulong
-    LPARAM_T = ctypes.c_longlong if is_64bit else ctypes.c_long
+import ctypes
+import pypdf
+from docx import Document
+from nlp_engine import NLPProcessor
+from md_merge import merge_ai_md
+from tkinterdnd2 import TkinterDnD, DND_FILES
 
-    CallWindowProc = ctypes.windll.user32.CallWindowProcW
-    CallWindowProc.argtypes = [ctypes.c_void_p, wintypes.HWND, wintypes.UINT, WPARAM_T, LPARAM_T]
-    CallWindowProc.restype = ctypes.c_void_p
-    
-    WM_DROPFILES = 0x0233
-    GWLP_WNDPROC = -4
-    
-    DragQueryFile = ctypes.windll.shell32.DragQueryFileW
-    DragQueryFile.argtypes = [wintypes.HDROP, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
-    DragQueryFile.restype = wintypes.UINT
-    
-    DragFinish = ctypes.windll.shell32.DragFinish
-    DragFinish.argtypes = [wintypes.HDROP]
-    DragFinish.restype = None
-    
-    DragAcceptFiles = ctypes.windll.shell32.DragAcceptFiles
-    DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
-    DragAcceptFiles.restype = None
-    
-    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_void_p, wintypes.HWND, wintypes.UINT, WPARAM_T, LPARAM_T)
-    
-    old_wndproc = GetWindowLong(hwnd, GWLP_WNDPROC)
-    
-    def py_wndproc(h, msg, wp, lp):
-        try:
-            if msg == WM_DROPFILES:
-                hdrop = wintypes.HDROP(wp)
-                count = DragQueryFile(hdrop, 0xFFFFFFFF, None, 0)
-                files = []
-                for i in range(count):
-                    length = DragQueryFile(hdrop, i, None, 0)
-                    buf = ctypes.create_unicode_buffer(length + 1)
-                    DragQueryFile(hdrop, i, buf, length + 1)
-                    files.append(buf.value)
-                DragFinish(hdrop)
-                tkwindow._dropped_files = files
-                tkwindow.event_generate("<<DropFiles>>", when="tail")
-                return 0
-        except Exception as e:
-            print(f"DnD Hook Error: {e}", file=sys.stderr)
-        
-        return CallWindowProc(ctypes.c_void_p(old_wndproc), wintypes.HWND(h), wintypes.UINT(msg), WPARAM_T(wp), LPARAM_T(lp))
-    
-    tkwindow.bind("<<DropFiles>>", lambda e: drop_func(tkwindow._dropped_files))
-    tkwindow._drop_wndproc = WNDPROC(py_wndproc)
-    
-    # Разрешаем прохождение сообщений DnD даже если приложение запущено от имени Администратора (UIPI)
-    try:
-        ChangeWindowMessageFilterEx = ctypes.windll.user32.ChangeWindowMessageFilterEx
-        ChangeWindowMessageFilterEx.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.DWORD, ctypes.c_void_p]
-        ChangeWindowMessageFilterEx.restype = wintypes.BOOL
-        MSGFLT_ALLOW = 1
-        ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, None)
-        ChangeWindowMessageFilterEx(hwnd, 0x0049, MSGFLT_ALLOW, None) # WM_COPYGLOBALDATA
-    except AttributeError:
-        pass # Windows older than 7
-
-    DragAcceptFiles(hwnd, True)
-    SetWindowLong(hwnd, GWLP_WNDPROC, ctypes.cast(tkwindow._drop_wndproc, ctypes.c_void_p))
+class TkinterDnD_CTk(ctk.CTk, TkinterDnD.DnDWrapper):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.TkdndVersion = TkinterDnD._require(self)
 
 try:
-    import ctypes
     # Per-Monitor V2 DPI awareness (-4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).
-    # Важно задать argtypes: контекст — это псевдо-ХЕНДЛ (указатель), и без
-    # c_void_p ctypes передаст -4 как 32-битный int, который на 64-битной
-    # Windows усечётся и вызов молча не сработает → размытый UI и иконки.
     ctypes.windll.user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     ctypes.windll.user32.SetProcessDpiAwarenessContext.restype = ctypes.c_bool
     ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
@@ -211,7 +137,7 @@ class DocumentCard(ctk.CTkFrame):
         self.command(self.file_info['path'])
 
 
-class UmbraApp(ctk.CTk):
+class UmbraApp(TkinterDnD_CTk):
     def __init__(self, process_callback, deanon_callback=None, cleanup_callback=None):
         super().__init__(fg_color=BG_COLOR)
 
@@ -462,7 +388,8 @@ class UmbraApp(ctk.CTk):
         # на 64-битных системах из-за усечения указателей окна.
         if sys.platform == 'win32':
             try:
-                safe_hook_dropfiles(self, self._on_drop)
+                self.drop_target_register(DND_FILES)
+                self.dnd_bind('<<Drop>>', self._on_drop_event)
                 self.dnd_enabled = True
             except Exception as exc:
                 print(f"Drag-and-drop недоступен: {exc}", file=sys.stderr)
@@ -470,6 +397,10 @@ class UmbraApp(ctk.CTk):
         # Кнопки «Обновить» больше нет, а список стартует пустым: без этого
         # вызова пользователь увидел бы пустую панель без единой подсказки.
         self.refresh_files()
+
+    def _on_drop_event(self, event):
+        files = self.tk.splitlist(event.data)
+        self._on_drop(files)
 
     def _on_drop(self, filenames):
         """Приём перетащенных файлов и папок — основной способ дать документ."""
