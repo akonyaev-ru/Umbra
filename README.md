@@ -1,4 +1,4 @@
-# 🛡️ Umbra - анонимайзер юридических документов без выхода в интернет
+# 🛡️ Umbra - умный анонимайзер юридических документов без выхода в интернет
 
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
