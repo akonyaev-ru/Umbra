@@ -3,6 +3,9 @@
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![Offline](https://img.shields.io/badge/Privacy-100%25_Offline-success.svg)
+![GitHub release](https://img.shields.io/github/v/release/akonyaev-ru/Umbra)
+![Downloads](https://img.shields.io/github/downloads/akonyaev-ru/Umbra/total)
 ![Build](https://github.com/akonyaev-ru/Umbra/actions/workflows/build.yml/badge.svg)
 
 **Umbra** — это локальная кроссплатформенная утилита для безопасной анонимизации юридических документов. Программа находит чувствительные данные (ПДн) и заменяет их на безопасные метки (например, `[ФИО_1]`, `[ОРГАНИЗАЦИЯ_2]`), позволяя вам отправлять документы в нейросети, не нарушая соглашения о неразглашении и Федеральный закон «О персональных данных» № 152-ФЗ. Получив ответ от ИИ, Umbra автоматически подставит настоящие данные обратно.
