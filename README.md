@@ -1,23 +1,18 @@
-<h1 align="center">🛡️ Umbra</h1>
-<h3 align="center">Умный анонимайзер юридических документов без выхода в интернет</h3>
+# 🛡️ Umbra - умный анонимайзер юридических документов без выхода в интернет
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python">
-  <img src="https://img.shields.io/badge/License-AGPL_v3-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" alt="Platform">
-  <img src="https://img.shields.io/badge/Privacy-100%25_Offline-success.svg" alt="Offline">
-  <img src="https://img.shields.io/github/v/release/akonyaev-ru/Umbra" alt="GitHub release">
-  <img src="https://img.shields.io/github/downloads/akonyaev-ru/Umbra/total" alt="Downloads">
-  <img src="https://github.com/akonyaev-ru/Umbra/actions/workflows/build.yml/badge.svg" alt="Build">
-</p>
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![Offline](https://img.shields.io/badge/Privacy-100%25_Offline-success.svg)
+![GitHub release](https://img.shields.io/github/v/release/akonyaev-ru/Umbra)
+![Downloads](https://img.shields.io/github/downloads/akonyaev-ru/Umbra/total)
+![Build](https://github.com/akonyaev-ru/Umbra/actions/workflows/build.yml/badge.svg)
 
-<p align="center">
+<p align="justify">
   <strong>Umbra</strong> — это локальная кроссплатформенная утилита для безопасной анонимизации юридических документов. Программа находит чувствительные данные (ПДн) и заменяет их на безопасные метки (например, <code>[ФИО_1]</code>, <code>[ОРГАНИЗАЦИЯ_2]</code>), позволяя вам отправлять документы в нейросети, не нарушая соглашения о неразглашении и Федеральный закон «О персональных данных» № 152-ФЗ. Получив ответ от ИИ, Umbra автоматически подставит настоящие данные обратно.
 </p>
 
-<p align="center">
-  <img src="src/gui_preview.png" alt="Umbra Screenshot" width="800">
-</p>
+![Umbra Screenshot](src/gui_preview.png)
 
 ---
 
