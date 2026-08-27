@@ -24,7 +24,11 @@ MAX_ZIP_MEMBERS = 5_000
 MAX_ZIP_UNCOMPRESSED_BYTES = 250 * 1024 * 1024
 MAX_ZIP_RATIO = 200
 MAX_XLSX_CELLS = 1_000_000
-MANIFEST_SCHEMA = 1
+MANIFEST_SCHEMA = 2
+# Схема 1 — паспорта прежних версий: без поля algo_version. Читать их можно, но
+# восстановление по ним отклоняется (см. load_matching_manifest): правила
+# обезличивания с тех пор менялись, и метки указывали бы на другие значения.
+SUPPORTED_MANIFEST_SCHEMAS = (1, 2)
 
 # Byte-identical safe parts from python-docx 1.2.0's empty default template.
 # The dependency is pinned; updating it requires reviewing these fingerprints.
@@ -128,13 +132,15 @@ def write_json_atomic(path: str | os.PathLike[str], payload: dict) -> None:
         pass
 
 
-def write_manifest(output_path: str, original_path: str, options: dict) -> str:
+def write_manifest(output_path: str, original_path: str, options: dict,
+                   algo_version: str) -> str:
     manifest_path = output_path + ".umbra.json"
     payload = {
         "schema": MANIFEST_SCHEMA,
         "original_name": os.path.basename(original_path),
         "original_sha256": sha256_file(original_path),
         "output_name": os.path.basename(output_path),
+        "algo_version": algo_version,
         "options": {key: bool(value) for key, value in options.items()},
     }
     write_json_atomic(manifest_path, payload)
@@ -165,7 +171,7 @@ def find_matching_manifests(original_path: str) -> list:
             continue
         if (
             isinstance(data, dict)
-            and data.get("schema") == MANIFEST_SCHEMA
+            and data.get("schema") in SUPPORTED_MANIFEST_SCHEMAS
             and data.get("original_name") == os.path.basename(original_path)
             and data.get("original_sha256") == expected_hash
             and isinstance(data.get("options"), dict)
@@ -174,7 +180,7 @@ def find_matching_manifests(original_path: str) -> list:
     return valid
 
 
-def load_matching_manifest(original_path: str) -> dict:
+def load_matching_manifest(original_path: str, algo_version: str) -> dict:
     """Find the newest valid sidecar bound to this unchanged original."""
     valid = find_matching_manifests(original_path)
     if not valid:
@@ -187,6 +193,19 @@ def load_matching_manifest(original_path: str) -> dict:
         raise ValueError(
             "Найдено несколько паспортов с разными настройками. "
             "Удалите устаревшие файлы *.umbra.json или обезличьте оригинал заново."
+        )
+    # Карта замен нигде не хранится: она строится повторной анонимизацией
+    # оригинала. Если правила обезличивания с тех пор изменились (обновление
+    # Umbra), состав и нумерация меток будут другими — [ФИО_3] из старого ответа
+    # ИИ указал бы на другого человека. Тихо подставить чужие данные хуже, чем
+    # отказать, поэтому проверка жёсткая.
+    stored_version = valid[0][1].get("algo_version")
+    if stored_version != algo_version:
+        raise ValueError(
+            "Паспорт обезличивания создан другой версией Umbra "
+            f"(в паспорте: {stored_version or 'не указана'}, сейчас: {algo_version}). "
+            "Правила обезличивания с тех пор изменились, и метки указывали бы "
+            "не на те данные. Обезличьте оригинал заново и отправьте ИИ новый файл."
         )
     return valid[0][1]
 

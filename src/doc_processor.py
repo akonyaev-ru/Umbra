@@ -9,7 +9,7 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 import naming
-from nlp_engine import NLPProcessor, PlaceholderMapper, TAG_PER
+from nlp_engine import ALGO_VERSION, NLPProcessor, PlaceholderMapper, TAG_PER
 from security_utils import (
     MAX_XLSX_CELLS,
     atomic_output,
@@ -106,7 +106,7 @@ class DocumentProcessor:
                 else:
                     self._process_html(file_path, temporary, hide_names, hide_locations,
                                        hide_orgs, hide_dates, smart_contract_mode)
-            write_manifest(out_path, file_path, options)
+            write_manifest(out_path, file_path, options, ALGO_VERSION)
         except Exception:
             # A document without its sidecar cannot be restored reliably.  Do
             # not leave a half-published result that looks usable.
@@ -167,18 +167,142 @@ class DocumentProcessor:
         self._write_redacted_pdf(in_path, out_path, mapper)
         return mapper
 
-    @staticmethod
-    def _write_redacted_pdf(in_path, out_path, mapper):
-        import fitz
-        doc = fitz.open(in_path)
-        for page in doc:
-            for entity_text in mapper.mapping.values():
-                for inst in page.search_for(entity_text, quads=True):
-                    page.add_redact_annot(inst, fill=(0, 0, 0))
-            page.apply_redactions()
-        doc.save(out_path)
-        doc.close()
+    def _write_redacted_pdf(self, in_path, out_path, mapper):
+        """Закрашивает PDF и ПРОВЕРЯЕТ результат двумя независимыми способами.
+
+        Проверка обязательна потому, что карта строится по тексту от pdfplumber,
+        а закраска идёт поиском средствами fitz: раскладки не обязаны совпадать
+        (переносы слов, кернинг, лигатуры, две колонки). Промах означал, что ПДн
+        остаются в «обезличенном» PDF, и никакой ошибки не возникало — юрист
+        отправлял файл в облачный ИИ, считая его чистым.
+
+        1. Ни одно значение карты не должно извлекаться из результата.
+        2. Детектор, прогнанный по тексту результата, не должен находить ПДн —
+           это ловит и те случаи, когда значение в PDF записано иначе, чем его
+           увидел pdfplumber (перенос «Ива-/нов»), и потому в карту не попало.
+        """
+        leaked = self._redact_pdf_file(in_path, out_path, mapper)
+        leaked += self._pdf_detector_residuals(out_path)
+        if leaked:
+            unique = list(dict.fromkeys(leaked))
+            preview = ', '.join(repr(v) for v in unique[:3])
+            more = f' и ещё {len(unique) - 3}' if len(unique) > 3 else ''
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            raise ValueError(
+                'Не удалось надёжно обезличить PDF: в тексте осталось то, что '
+                f'похоже на персональные данные ({preview}{more}). Так бывает у '
+                'PDF со сложной вёрсткой и переносами. Сохраните документ в '
+                '.docx и обезличьте его — там замена делается по тексту, а не '
+                'поиском по странице.')
         return mapper
+
+    def _pdf_detector_residuals(self, path):
+        """Прогоняет детектор по тексту готового PDF: что найдёт — то утечка."""
+        import fitz
+        doc = fitz.open(path)
+        try:
+            texts = [page.get_text() for page in doc]
+        finally:
+            doc.close()
+        found = []
+        for text in texts:
+            for entity in self.nlp.extract_entities(text):
+                value = entity['text'].strip()
+                if len(value) >= self._PDF_MIN_REDACT_LEN:
+                    found.append(value)
+        return found
+
+    # Значения короче трёх символов (номер дома «5», номер документа «7») в PDF
+    # НЕ закрашиваются: page.search_for('5') находит каждую цифру 5 на странице,
+    # и документ превращается в решето из чёрных квадратов. Сама по себе одинокая
+    # цифра никого не идентифицирует, а разрушенный документ бесполезен.
+    _PDF_MIN_REDACT_LEN = 3
+
+    @classmethod
+    def _pdf_redaction_targets(cls, mapper):
+        """Значения карты, которые имеет смысл искать в PDF (см. _PDF_MIN_REDACT_LEN)."""
+        seen, targets = set(), []
+        for value in mapper.mapping.values():
+            value = value.strip()
+            if len(value) >= cls._PDF_MIN_REDACT_LEN and value not in seen:
+                seen.add(value)
+                targets.append(value)
+        return targets
+
+    @classmethod
+    def _redact_pdf_file(cls, in_path, out_path, mapper):
+        """Физически удаляет ПДн из PDF и чистит всё, что вокруг текста.
+
+        Два обязательных условия, которых раньше не было:
+        1. ПРОВЕРКА ПОСЛЕ ЗАКРАСКИ. Карта строится по тексту от pdfplumber, а
+           ищется значение движком fitz — раскладки не обязаны совпадать
+           (переносы, кернинг, лигатуры). Промах search_for означал, что ПДн
+           остаются в «обезличенном» PDF, и никто об этом не узнавал. Теперь
+           результат перечитывается, и при находке выдаётся ошибка — лучше
+           отказать, чем отдать пользователю файл с ПДн под видом чистого.
+        2. ОЧИСТКА КОНТЕЙНЕРА. Чёрный квадрат не трогает метаданные (/Info, XMP),
+           аннотации, вложения, JavaScript и поля форм — а README обещает удаление
+           «из метаданных и скрытых слоёв». Проверка показывала автора «Кознова
+           Мария Петровна» и комментарий с телефоном в готовом [ANON].pdf.
+        """
+        import fitz
+        targets = cls._pdf_redaction_targets(mapper)
+        doc = fitz.open(in_path)
+        try:
+            for page in doc:
+                for entity_text in targets:
+                    for inst in page.search_for(entity_text, quads=True):
+                        page.add_redact_annot(inst, fill=(0, 0, 0))
+                page.apply_redactions()
+                # Комментарии/выноски PDF — отдельный слой: закраска текста их не
+                # трогает, а в них сплошь ПДн («звонить Петрову, тел. …») плюс имя
+                # автора примечания. scrub() удаляет только ссылки, поэтому чистим
+                # аннотации сами. Обезличенному документу они не нужны.
+                for annot in list(page.annots() or []):
+                    page.delete_annot(annot)
+            # scrub() убирает метаданные, XMP, аннотации, вложения, JS, ссылки,
+            # поля форм, миниатюры и невидимый текст. redactions=False — их мы
+            # уже применили выше сами.
+            doc.scrub(redactions=False)
+            doc.set_metadata({})
+            doc.del_xml_metadata()
+            doc.save(out_path, garbage=4, deflate=True, clean=True)
+        finally:
+            doc.close()
+
+        leaked = cls._pdf_residual_values(out_path, targets)
+        return leaked
+
+    @staticmethod
+    def _pdf_residual_values(path, targets):
+        """Значения из карты, которые всё ещё извлекаются из готового PDF."""
+        import fitz
+        doc = fitz.open(path)
+        try:
+            chunks = []
+            for page in doc:
+                chunks.append(page.get_text())
+                # Аннотации и поля форм в get_text() не попадают — проверяем их
+                # отдельно, иначе «чисто» отчиталось бы о файле с ПДн в выносках.
+                for annot in (page.annots() or []):
+                    info = annot.info or {}
+                    chunks.extend(str(info.get(key) or '')
+                                  for key in ('content', 'title', 'subject'))
+                for widget in (page.widgets() or []):
+                    chunks.append(str(getattr(widget, 'field_value', '') or ''))
+            chunks.extend(str(v or '') for v in (doc.metadata or {}).values())
+            text = '\n'.join(chunks)
+        finally:
+            doc.close()
+        # Пробелы в PDF расставляются по координатам, поэтому сравниваем по
+        # схлопнутым пробелам — иначе «Иванов  Иван» не совпало бы с картой.
+        squeezed = re.sub(r'\s+', ' ', text)
+        return [value for value in targets
+                if re.sub(r'\s+', ' ', value) in squeezed]
 
     @staticmethod
     def _write_pdf_docx(blocks, out_path):
@@ -511,12 +635,23 @@ class DocumentProcessor:
         # объектом в нескольких позициях row.cells. Без дедупликации такая ячейка
         # анонимизировалась бы дважды: второй проход прогонял бы NER уже по МЕТКАМ
         # ([ФИО_1]) и портил их. Обрабатываем каждый физический <w:tc> один раз.
+        #
+        # Ключ — САМ элемент, а не id(cell._tc). lxml создаёт Python-обёртку над
+        # узлом XML на лету и освобождает её сразу после использования, а
+        # интерпретатор переиспользует освободившийся адрес. Поэтому id() новой
+        # обёртки регулярно совпадал с id() уже уничтоженной обёртки ДРУГОЙ
+        # ячейки, и та ошибочно считалась обработанной: её текст уходил в
+        # [ANON]-файл как есть. На таблице 3x2 пропускалась третья ячейка —
+        # а реквизиты сторон в договорах почти всегда лежат в таблице.
+        # Множество держит сильную ссылку на элемент, поэтому обёртка не
+        # уничтожается и её тождество остаётся стабильным.
         seen = set()
         for row in table.rows:
             for cell in row.cells:
-                if id(cell._tc) in seen:
+                tc = cell._tc
+                if tc in seen:
                     continue
-                seen.add(id(cell._tc))
+                seen.add(tc)
                 for para in cell.paragraphs:
                     if smart_contract_mode:
                         is_anonymizing = self._smart_toggle(para.text, is_anonymizing)
@@ -643,7 +778,7 @@ class DocumentProcessor:
         elif answer_ext == '.xlsx':
             validate_ooxml(new_path, 'xlsx', reject_formulas=True)
 
-        manifest = load_matching_manifest(source_path)
+        manifest = load_matching_manifest(source_path, ALGO_VERSION)
         options = manifest['options']
         hide_names = bool(options.get('hide_names', True))
         hide_locations = bool(options.get('hide_locations', True))
@@ -893,7 +1028,12 @@ class DocumentProcessor:
         if not cats:
             return None
         # Длинные категории первыми, чтобы не отхватить префикс (ИНДЕКС до ИНН).
-        alt = '|'.join(re.escape(c) for c in sorted(cats, key=len, reverse=True))
+        # Порядок альтернации: сначала длинные (ИНН_ЮЛ до ИНН), при равной длине —
+        # по алфавиту. Прежний sorted(cats, key=len, reverse=True) по МНОЖЕСТВУ
+        # оставлял равнодлинные категории в порядке итерации set, а он зависит от
+        # рандомизации хешей строк и менялся от запуска к запуску. Для инструмента,
+        # у которого детерминизм — основа восстановления, этого быть не должно.
+        alt = '|'.join(re.escape(c) for c in sorted(cats, key=lambda c: (-len(c), c)))
         return re.compile(r'\[\s*(' + alt + r')[\s_\-]*(\d+)\s*\]', re.IGNORECASE)
 
     def _load_mapping(self, source_path, hide_names, hide_locations, hide_orgs, hide_dates, smart_contract_mode):
