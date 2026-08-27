@@ -160,11 +160,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      # checkout нужен только ради release_notes.md (body_path).
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-
+      # Checkout здесь НЕ нужен: тело релиза берётся из автогенерации GitHub
+      # (generate_release_notes ниже), а выкладываемые файлы приезжают из
+      # артефактов сборки. Прежний шаг стоял ради release_notes.md + body_path,
+      # но сам файл удалён (коммит 40dadbb), и шаг только тратил время.
       - name: Download Windows artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
