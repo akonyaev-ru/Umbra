@@ -84,15 +84,53 @@ STOP_STEMS = (
     'ущерб', 'вознагражд', 'платёж', 'платеж', 'сумм', 'стоимост', 'оборуд',
     'флипчарт', 'цветопроб', 'протирк', 'ресивер', 'убираем', 'гостиничн',
     'инженерн', 'корреспонденци', 'приёмк', 'приемк', 'транспортирован',
+    'оказани', 'выполнени', 'обслуживани', 'сопровождени', 'консультац',
     # Заголовки, юридические и общие термины, часто пишущиеся капсом
-    'студи', 'помещени', 'квартир', 'подписан', 'услови', 'подпис', 
+    'студи', 'помещени', 'квартир', 'подписан', 'услови', 'подпис',
     'обязанност', 'ответственност', 'проч', 'реквизит', 'закон', 'кодекс',
     # Аббревиатуры кодексов и законов
     'гк', 'гпк', 'нк', 'ук', 'коап', 'фз', 'апк',
 )
 
+# Слова, которыми набирают ЗАГОЛОВКИ разделов и служебные обороты юрдокументов.
+# ВАЖНО: этот список проверяется ТОЛЬКО в запасных regex-правилах (ФИО капсом,
+# латинские названия) — см. _caps_name_span/_latin_org_span. К NER-спанам он НЕ
+# применяется: основы здесь короткие и «съели» бы редкие настоящие фамилии
+# («Правдин» ← 'прав', «Ценин» ← 'цен'), а это была бы утечка ПДн.
+HEADING_STEMS = (
+    'предмет', 'цен', 'порядок', 'расчёт', 'расчет', 'заключительн', 'общ',
+    'срок', 'действ', 'вступлен', 'конфиденциальн', 'форс', 'мажор',
+    'обстоятельств', 'непреодолим', 'гаранти', 'качеств', 'разрешени', 'спор',
+    'изменени', 'расторжени', 'прекращени', 'уведомлени', 'адрес', 'иные',
+    'прав', 'налог', 'ндс', 'аванс', 'предоплат', 'отгрузк', 'возврат',
+    'рекламац', 'ассортимент', 'номенклатур', 'образц', 'образец', 'форм',
+    'приём', 'прием', 'передач', 'сдач', 'акт', 'счёт', 'счет', 'отчёт', 'отчет',
+    'применим', 'юрисдикц', 'арбитраж', 'третейск', 'претензионн', 'досудебн',
+    'антикоррупционн', 'персональн', 'данн', 'обработк', 'основани',
+    'наименовани', 'количеств', 'ед.', 'итог', 'всего', 'сведени', 'информац',
+    'настоящ', 'приняти', 'исполнени', 'заключени', 'сумм', 'размер',
+)
+
+# Названия судов и госорганов — это не персональные данные, а указание на
+# подсудность/компетенцию. Проверяем ПОЛНЫМИ формами слова, а не префиксом:
+# основа 'суд' по префиксу погасила бы фамилию «Судаков», а 'банк' — «Банков».
+_INSTITUTION_RE = re.compile(
+    r'^(?:суд(?:а|у|ом|е|ы|ов|ам|ами|ах)?|судебн\w*|арбитражн\w*|третейск\w*|'
+    r'мирово\w*|районн\w*|городск\w*|областн\w*|окружн\w*|кассационн\w*|'
+    r'апелляционн\w*|верховн\w*|конституционн\w*|'
+    r'палат(?:а|ы|е|у|ой|ам|ами|ах)?|торгово-промышленн\w*|'
+    r'прокуратур\w*|инспекци\w*|росреестр\w*|росстат\w*|роспотребнадзор\w*|'
+    r'министерств\w*|ведомств\w*|департамент\w*|комитет\w*|агентств\w*|'
+    r'нотариальн\w*|нотариус\w*)$',
+    re.IGNORECASE,
+)
+
 _LETTER_RE = re.compile(r'[a-zA-Zа-яёА-ЯЁ]')
 _WORD_RE = re.compile(r'[a-zA-Zа-яёА-ЯЁ]+')
+# Составные слова через дефис — одним токеном: «Торгово-промышленная палата»
+# иначе распадалась на «Торгово» + «промышленная», и проверка по полным формам
+# (_INSTITUTION_RE) не срабатывала.
+_WORD_HYPH_RE = re.compile(r'[a-zA-Zа-яёА-ЯЁ]+(?:-[a-zA-Zа-яёА-ЯЁ]+)*')
 
 # Метки-заменители по категориям.
 TAG_PER = '[ФИО]'
@@ -125,6 +163,30 @@ TAG_DATE = '[ДАТА]'
 # Регулярное выражение для всех дат (вида DD.MM.YYYY, YYYY-MM-DD и т.д.)
 _DATE_RE = re.compile(r'\b(?:[0-3]?\d[\./\-][01]?\d[\./\-](?:19|20)?\d{2}|(?:19|20)\d{2}[\./\-][01]?\d[\./\-][0-3]?\d)\b')
 
+# Версия правил обезличивания. Карта замен НЕ хранится на диске — она
+# восстанавливается ПОВТОРНОЙ анонимизацией оригинала. Значит, любое изменение
+# regex-правил, STOP_STEMS, валидаторов или модели меняет состав и НУМЕРАЦИЮ
+# меток: [ФИО_3] в старом ответе ИИ после обновления Umbra указывал бы на другого
+# человека. Паспорт (*.umbra.json) хранит это значение, и восстановление с чужой
+# версией отклоняется — молча подставить не те данные хуже, чем отказать.
+# ПОДНИМАТЬ при любой правке правил детекции в этом файле.
+ALGO_VERSION = '2026-08-27'
+
+# Приоритет категорий при слиянии перекрывающихся спанов: побеждает более
+# конкретная и более чувствительная. Таблица ФИКСИРОВАНА — от неё зависит
+# детерминизм нумерации меток, а значит и точность восстановления.
+_CATEGORY_PRIORITY = {
+    TAG_PER: 100,
+    TAG_PASSPORT: 95, TAG_SNILS: 95, TAG_INN_FL: 95,
+    TAG_DATE_BIRTH: 92, TAG_PLACE_BIRTH: 92, TAG_PASSPORT_ISSUED: 92,
+    TAG_PODRAZD: 92, TAG_DATE_ISSUE: 90,
+    TAG_ORG: 80, TAG_PROJECT: 78,
+    TAG_EMAIL: 75, TAG_PHONE: 75, TAG_ADDR: 70,
+    TAG_ACCOUNT: 65, TAG_INN_UL: 65, TAG_OGRN: 65, TAG_KPP: 65,
+    TAG_BIK: 65, TAG_SWIFT: 65, TAG_KADASTR: 65, TAG_EGRN: 65,
+    TAG_MONEY: 40, TAG_DOCNO: 30, TAG_INDEX: 20, TAG_DATE: 10,
+}
+
 # Границы предложений для адресных паттернов
 _SENT_END = (
     r'(?<!\bг)(?<!\bул)(?<!\bпр)(?<!\bпл)(?<!\bш)(?<!\bнаб)(?<!\bпер)(?<!\bбульв)'
@@ -145,7 +207,9 @@ def _is_stop_word(w):
 # Обозначения страны/государства-в-целом: не ПДн, а указание применимого права
 # («ГК РФ», «право Российской Федерации»). Проверяется ТОЛЬКО для гео-спанов (LOC),
 # поэтому фамилии (спаны PER) эти корни не затрагивают — риска утечки нет.
-_COUNTRY_STEMS = ('рф', 'росс', 'федерац')
+# 'росси', а НЕ 'росс': по короткой основе под «указание страны» подпадали
+# настоящие населённые пункты («Россошь», «Россоши») и их адреса не скрывались.
+_COUNTRY_STEMS = ('рф', 'росси', 'федерац')
 
 
 def _is_country_ref(s):
@@ -163,6 +227,180 @@ def _appears_lowercase(token, text):
         if text[m.start()].islower():
             return True
     return False
+
+
+# --------------------------------------------------------------------------- #
+#  Валидаторы запасных regex-правил (защита от чрезмерной анонимизации)         #
+# --------------------------------------------------------------------------- #
+# Запасные правила «ФИО капсом» и «латинское название» намеренно широки — они
+# страхуют пропуски NER. Без проверки они превращали в [ФИО] заголовки разделов
+# («ПРЕДМЕТ ДОГОВОРА», «ПОРЯДОК РАСЧЁТОВ»), а в [ОРГАНИЗАЦИЯ] — любое латинское
+# слово с заглавной («Force Majeure»). Документ становился нечитаемым для ИИ, а
+# юрист получал бессмысленный ответ. Валидаторы ниже отсекают такие совпадения,
+# НЕ трогая NER-путь: настоящие имена по-прежнему скрываются.
+
+def _is_generic_word(w):
+    """Родовое слово: роль стороны, тип документа, заголовок раздела, госорган."""
+    wl = w.lower()
+    return (_is_stop_word(w)
+            or any(wl.startswith(stem) for stem in HEADING_STEMS)
+            or _INSTITUTION_RE.match(w) is not None)
+
+
+# Окончания русских фамилий, имён и отчеств. Заголовки разделов их не имеют,
+# поэтому это надёжный признак «здесь действительно имя человека».
+_NAME_ENDING_RE = re.compile(
+    r'(?:ОВИЧ|ЕВИЧ|ЬЕВИЧ|ИЧ|ОВНА|ЕВНА|ЬЕВНА|ИНИЧНА|ИЧНА|'
+    r'ОВ|ЁВ|ЕВ|ИН|ЫН|ОВА|ЁВА|ЕВА|ИНА|ЫНА|'
+    r'СКИЙ|ЦКИЙ|СКАЯ|ЦКАЯ|СКОЙ|СКИХ|ЫХ|ИХ|'
+    r'ЕНКО|УК|ЮК|ЧУК|ШВИЛИ|ДЗЕ|ЯН|ЯНЦ|ОГЛЫ|КЫЗЫ|ИДИ|ИАДИ)$')
+
+
+def _word_spans(text):
+    """[(слово, start, stop)] по буквенным словам строки."""
+    return [(m.group(0), m.start(), m.end()) for m in _WORD_RE.finditer(text)]
+
+
+def _caps_name_span(text, start, stop):
+    """Проверяет совпадение запасного правила «ФИО капсом».
+
+    Возвращает суженный (start, stop) или None, если это не имя человека:
+    - все слова родовые («ПРЕДМЕТ ДОГОВОРА», «ГЕНЕРАЛЬНЫЙ ДИРЕКТОР») → None;
+    - ни одно слово не похоже на фамилию/имя/отчество по окончанию → None.
+    Ведущие и замыкающие слова-должности отсекаются, чтобы «ДИРЕКТОР ИВАНОВ»
+    дало метку только на «ИВАНОВ», а слово «ДИРЕКТОР» осталось читаемым.
+    Обрезаем ТОЛЬКО по STOP_STEMS (роли и должности): по HEADING_STEMS обрезать
+    нельзя — там короткие основы, и «ПРАВДИН ИВАН» потерял бы фамилию.
+    """
+    words = _word_spans(text[start:stop])
+    if not words:
+        return None
+    if all(_is_generic_word(w) for w, _s, _e in words):
+        return None
+    head, tail = 0, len(words)
+    while head < tail and _is_stop_word(words[head][0]):
+        head += 1
+    while tail > head and _is_stop_word(words[tail - 1][0]):
+        tail -= 1
+    if head >= tail:
+        return None
+    kept = words[head:tail]
+    if not any(_NAME_ENDING_RE.search(w.upper()) for w, _s, _e in kept):
+        return None
+    return start + kept[0][1], start + kept[-1][2]
+
+
+# Латинские слова, которые в русских договорах означают что угодно, кроме
+# названия компании: термины Инкотермс, валюты, служебные слова, форматы.
+_LATIN_STOP = frozenset("""
+a an the and or of for in on by with to from at as is are be shall will may
+force majeure agreement contract annex appendix addendum amendment party parties
+seller buyer supplier customer client purchaser vendor contractor consultant
+goods services works price prices payment payments terms conditions delivery
+quantity quality warranty liability confidentiality governing law arbitration
+incoterms exw fca fob cif cip cpt dap ddp dpu fas cfr vat tax total sum amount
+subtotal date signature signed stamp seal director general manager chief
+executive officer chairman president head department division
+usd eur rub gbp chf cny jpy kzt byn uah try aed inr brl
+no nos nr num item items unit units pcs pc kg gm mm cm km ltr
+pdf doc docx xls xlsx ppt csv html xml json url www http https email mail
+iso gost din ansi astm en ce ok id it hr ceo cfo cto coo llc inc ltd
+january february march april may june july august september october november
+december mon tue wed thu fri sat sun
+english russian german french spanish italian chinese japanese european
+governed jurisdiction herein hereby hereof thereof whereas including without
+limitation notice confidential information intellectual property title risk
+force-majeure article clause section schedule exhibit page total net gross
+""".split())
+
+# Организационно-правовые формы: их наличие само по себе подтверждает, что перед
+# нами название компании («Microsoft Corporation», «Siemens AG»).
+_LATIN_ORG_MARKERS = frozenset("""
+llc ltd ltda inc incorporated corp corporation co company gmbh mbh ag sa s.a
+srl s.r.l bv b.v nv n.v plc pte pty oy oyj ab as a/s aps kft sp spa s.p.a
+sarl s.a.r.l kg ohg partners holding holdings group international trust bank
+""".split())
+
+
+def _latin_org_span(text, start, stop):
+    """Проверяет совпадение запасного правила «латинское название организации».
+
+    Возвращает суженный (start, stop) или None. Отсекает термины Инкотермс,
+    валюты, форматы файлов и обычные английские слова («Force Majeure»,
+    «The Agreement», «USD»), оставляя настоящие названия («Microsoft
+    Corporation»). Одиночные короткие аббревиатуры (≤3 символов: PDF, ISO, EXW)
+    не скрываются — их слишком много в технических приложениях, а NER всё равно
+    ловит реальные названия.
+    """
+    words = _word_spans(text[start:stop])
+    if not words:
+        return None
+    if any(w.lower() in _LATIN_ORG_MARKERS for w, _s, _e in words):
+        # Легальная форма рядом — это точно организация, режем целиком.
+        return start + words[0][1], start + words[-1][2]
+    head, tail = 0, len(words)
+    while head < tail and words[head][0].lower() in _LATIN_STOP:
+        head += 1
+    while tail > head and words[tail - 1][0].lower() in _LATIN_STOP:
+        tail -= 1
+    if head >= tail:
+        return None
+    kept = words[head:tail]
+    if len(kept) == 1 and len(kept[0][0]) <= 3:
+        return None
+    return start + kept[0][1], start + kept[-1][2]
+
+
+# Ссылки на нормативные акты и структурные единицы документа: число после них —
+# это НЕ денежная сумма («ГОСТ 12.34», «статьями 15.25», «п. 5.10»).
+_NOT_MONEY_BEFORE_RE = re.compile(
+    r'(?:ГОСТ|ТУ|СНиП|СанПиН|СП|ISO|DIN|ОКВЭД|ОКПД|ОКТМО|ОКАТО|'
+    r'стать[а-яё]*|ст\.|пункт[а-яё]*|п\.|подпункт[а-яё]*|пп\.|'
+    r'раздел[а-яё]*|глав[а-яё]*|абзац[а-яё]*|приложени[а-яё]*|'
+    r'редакци[а-яё]*|версия|верси[а-яё]*|v)\s*[\d.,\s-]{0,20}$',
+    re.IGNORECASE)
+
+
+def _money_value_ok(value):
+    """False для «сумм» из одних нулей: «рублей 00 копеек» → метка не нужна."""
+    digits = [c for c in value if c.isdigit()]
+    return bool(digits) and any(c != '0' for c in digits)
+
+
+def _v_money_plain(text, start, stop):
+    """Число без слова валюты — сумма, только если рядом нет ссылки на норму."""
+    if not _money_value_ok(text[start:stop]):
+        return None
+    if _NOT_MONEY_BEFORE_RE.search(text[max(0, start - 40):start]):
+        return None
+    return start, stop
+
+
+def _v_money(text, start, stop):
+    """Сумма со словом валюты: отсекаем только нулевые («00 копеек»)."""
+    return (start, stop) if _money_value_ok(text[start:stop]) else None
+
+
+# Внутренние ссылки документа: «Приложение № 1», «пункт № 2», «Спецификация № 3».
+# Это не номер документа, а навигация — скрывать её значит лишить ИИ структуры
+# (и склеить разные приложения в одну метку, так как значение «1» общее).
+_INTERNAL_REF_RE = re.compile(
+    r'(?:приложени[а-яё]*|спецификаци[а-яё]*|пункт[а-яё]*|п\.|подпункт[а-яё]*|'
+    r'раздел[а-яё]*|глав[а-яё]*|стать[а-яё]*|ст\.|табл[а-яё]*|form[a-z]*|'
+    r'форм[а-яё]*|лист[а-яё]*|том[а-яё]*|част[ьи][а-яё]*|этап[а-яё]*|'
+    r'позици[а-яё]*|строк[а-яё]*)\s*$',
+    re.IGNORECASE)
+
+
+def _v_docno(text, start, stop):
+    """Номер после «№»: короткие внутренние ссылки документа не скрываем."""
+    value = text[start:stop]
+    if len(value) <= 2 and value.isdigit():
+        before = text[max(0, start - 40):start]
+        before = re.sub(r'\s*№\s*$', '', before)
+        if _INTERNAL_REF_RE.search(before):
+            return None
+    return start, stop
 
 
 class PlaceholderMapper:
@@ -203,37 +441,29 @@ class NLPProcessor:
     def __init__(self):
         self._compile_regexes()
         self._ner_cache = {}
-        
-        try:
-            from transformers import pipeline
-            self.hf_ner = pipeline("ner", model="Babelscape/wikineural-multilingual-ner", aggregation_strategy="simple")
-            self.use_hf = True
-        except ImportError:
-            self.use_hf = False
-            navec_path = get_resource_path(os.path.join("models", "navec_news_v1_1B_250K_300d_100q.tar"))
-            slovnet_path = get_resource_path(os.path.join("models", "slovnet_ner_news_v1.tar"))
-            
-            if not os.path.exists(navec_path) or not os.path.exists(slovnet_path):
-                raise FileNotFoundError(f"Models not found. Checked: {navec_path}, {slovnet_path}")
 
-            self.navec = Navec.load(navec_path)
-            self.ner = NER.load(slovnet_path)
-            self.ner.navec(self.navec)
+        # ТОЛЬКО вшитые модели navec+slovnet. Ветку «если установлен transformers,
+        # берём Babelscape/wikineural-multilingual-ner» убрали намеренно и НЕ
+        # возвращать: (1) transformers тянет модель из интернета при первом
+        # обращении — это прямое нарушение обещания «100% офлайн», данного в
+        # README, причём молча и на документе с ПДн; (2) разметка у другой модели
+        # другая, а карта восстановления строится ПОВТОРНОЙ анонимизацией
+        # оригинала — сменился бы состав меток, и данные подставились бы не туда.
+        navec_path = get_resource_path(os.path.join("models", "navec_news_v1_1B_250K_300d_100q.tar"))
+        slovnet_path = get_resource_path(os.path.join("models", "slovnet_ner_news_v1.tar"))
+
+        if not os.path.exists(navec_path) or not os.path.exists(slovnet_path):
+            raise FileNotFoundError(f"Models not found. Checked: {navec_path}, {slovnet_path}")
+
+        self.navec = Navec.load(navec_path)
+        self.ner = NER.load(slovnet_path)
+        self.ner.navec(self.navec)
 
     def _ner_markup(self, text):
         """NER-разметка текста с мемоизацией (см. self._ner_cache)."""
         markup = self._ner_cache.get(text)
         if markup is None:
-            if getattr(self, 'use_hf', False):
-                hf_result = self.hf_ner(text)
-                spans = []
-                for ent in hf_result:
-                    group = ent['entity_group']
-                    if group in ('PER', 'ORG', 'LOC'):
-                        spans.append(TransformerSpan(ent['start'], ent['end'], group))
-                markup = TransformerMarkup(spans)
-            else:
-                markup = self.ner(text)
+            markup = self.ner(text)
             self._ner_cache[text] = markup
         return markup
 
@@ -263,6 +493,25 @@ class NLPProcessor:
             (re.compile(r'(ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.[А-ЯЁ]\.)'), TAG_PER, 1),
             (re.compile(r'(ИП\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)'), TAG_PER, 1),
 
+            # 1a. ФИО по морфологии — страховка от двух разных промахов сразу:
+            # (а) NER размечает фамилию как ORG («Банков» → ORG), и тогда её гасил
+            #     STOP_STEMS ('банк') — фамилия уходила в ИИ в открытом виде;
+            # (б) NER вовсе не видит имя в непривычном контексте.
+            # Шаблон требует фамильное И отчественное окончание, поэтому ложных
+            # срабатываний на обычных словах практически не даёт. STOP_STEMS к
+            # нему НАМЕРЕННО не применяется: реальные фамилии «Поставщиков»,
+            # «Судаков», «Банков» иначе продолжали бы утекать.
+            (re.compile(r'([А-ЯЁ][а-яё]+(?:ов|ев|ёв|ин|ын|ский|цкий|ская|цкая|ова|ева|ёва|ина|ына|енко|ук|юк|чук|швили|дзе|ян)'
+                        r'\s+[А-ЯЁ][а-яё]+'
+                        r'\s+[А-ЯЁ][а-яё]+(?:ович|евич|ьевич|овна|евна|ьевна|инична|ична))'), TAG_PER, 1),
+            (re.compile(r'([А-ЯЁ][а-яё]+'
+                        r'\s+[А-ЯЁ][а-яё]+(?:ович|евич|ьевич|овна|евна|ьевна|инична|ична)'
+                        r'\s+[А-ЯЁ][а-яё]+(?:ов|ев|ёв|ин|ын|ский|цкий|ская|цкая|ова|ева|ёва|ина|ына|енко|ук|юк|чук|швили|дзе|ян))'), TAG_PER, 1),
+            (re.compile(r'([А-ЯЁ][а-яё]+(?:ов|ев|ёв|ин|ын|ский|цкий|ская|цкая|ова|ева|ёва|ина|ына|енко|ук|юк|чук|швили|дзе|ян)'
+                        r'\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.)'), TAG_PER, 1),
+            (re.compile(r'([А-ЯЁ]\.\s?[А-ЯЁ]\.\s+'
+                        r'[А-ЯЁ][а-яё]+(?:ов|ев|ёв|ин|ын|ский|цкий|ская|цкая|ова|ева|ёва|ина|ына|енко|ук|юк|чук|швили|дзе|ян))'), TAG_PER, 1),
+
             # 2. Недвижимость
             (re.compile(r'\b(\d{2}:\d{2}:\d{6,7}:\d{1,5}\s*-\s*\d{2}/\d{3}/\d{4}-\d+)\b'), TAG_EGRN, 1),
             (re.compile(r'\b(\d{2}:\d{2}:\d{6,7}:\d{1,5})\b'), TAG_KADASTR, 1),
@@ -285,7 +534,21 @@ class NLPProcessor:
             (re.compile(r'(?:зарегистрирован[а-яё]*\s+по\s+адресу\s*:\s*)([^\n]+?)(?=,\s*(?:СНИЛС|паспорт|серия|телефон)|\s*\(далее|' + _SENT_END + r'|\s*$)'), TAG_ADDR, 1),
             (re.compile(r'(?:адрес\s+регистрации\s*:\s*)([^\n]+?)(?=,\s*(?:СНИЛС|паспорт|серия|телефон)|\s*\(далее|' + _SENT_END + r'|\s*$)'), TAG_ADDR, 1),
             (re.compile(r'(?:(?:юридический|почтовый|фактический|адрес проживания|адрес)\s*(?:адрес)?\s*:\s*)((?:г(?:ород|\.)?\s+)?[А-ЯЁа-яёA-Za-z][^\n]{10,200}?)(?=,\s*(?:ИНН|ОГРН|СНИЛС|паспорт|телефон|расчётный|р/с|БИК)|' + _SENT_END + r'|\s*$)'), TAG_ADDR, 1),
-            (re.compile(r'(\bг\.?\s+[А-ЯЁ][а-яё]+\s*,\s*(?:ул|пр|наб|пер|бульв|ш|пл)\.?\s+[А-ЯЁа-яё]' + _ADDR_CHUNK + r'(?:\s*,\s*(?:д|дом|стр|корп|к|кв|офис|пом|эт)\.?\s*' + _ADDR_CHUNK + r')+)'), TAG_ADDR, 1),
+            # Город с дефисом («Санкт-Петербург», «Ростов-на-Дону») раньше не
+            # подходил под [А-ЯЁ][а-яё]+ и весь адрес оставался в открытом виде.
+            (re.compile(r'(\bг\.?\s+[А-ЯЁ][а-яё]+(?:-[А-ЯЁа-яё]+)*\s*,\s*(?:ул|пр|просп|проезд|наб|пер|бульв|ш|пл|туп|мкр|кв-л)\.?\s+[А-ЯЁа-яё]' + _ADDR_CHUNK + r'(?:\s*,\s*(?:д|дом|стр|корп|к|кв|оф|офис|пом|помещ|эт|этаж|комн|литер|лит|подъезд)\.?\s*' + _ADDR_CHUNK + r')+)'), TAG_ADDR, 1),
+            # Компоненты адреса по отдельности: «д. 12, кв. 5» без узнаваемого
+            # начала («наб. реки Мойки») раньше не попадал ни под одно правило —
+            # номер дома и квартиры уходили в ИИ в открытом виде. Ключевое слово
+            # («д.», «кв.») остаётся, скрывается только обозначение.
+            # «стр.»/«лит.» здесь НАМЕРЕННО нет: вне полного адреса «стр. 5» —
+            # это страница, и правило превращало бы ссылки на страницы в [АДРЕС].
+            # Внутри полного адреса они по-прежнему ловятся правилом выше.
+            (re.compile(r'\b(?:дом|д|корпус|корп|владение|влад|квартира|кв|'
+                        r'офис|оф|помещение|помещ|пом|этаж|эт|комната|комн|'
+                        r'подъезд)\.?\s*'
+                        r'(\d+[А-ЯЁа-яё]?(?:\s*/\s*\d+[А-ЯЁа-яё]?)?|[IVXLC]{1,5}\b)',
+                        re.IGNORECASE), TAG_ADDR, 1),
             
             # 5. Финансовые/налоговые идентификаторы (в порядке убывания длины)
             (re.compile(r'(?:р/с|к/с|расч[её]тный\s+счёт|расч[её]тный\s+счет|счёт|счет)\s*[№:\s]*(\d{20})'), TAG_ACCOUNT, 1),
@@ -302,8 +565,13 @@ class NLPProcessor:
             (re.compile(r'\b(04\d{7})\b'), TAG_BIK, 1), # БИК всегда с 04
             (re.compile(r'(?:SWIFT|свифт)\s*[:/]?\s*([A-Z]{6}[A-Z0-9]{2,5})'), TAG_SWIFT, 1),
 
-            # FALLBACK для ФИО капсом (2 или 3 слова) - часто встречается в печатях ЭДО
-            (re.compile(r'(?<![а-яёА-ЯЁa-zA-Z])([А-ЯЁ][А-ЯЁ-]{2,}(?:\s+[А-ЯЁ][А-ЯЁ-]{2,}){1,2})(?![а-яёА-ЯЁa-zA-Z])'), TAG_PER, 1),
+            # FALLBACK для ФИО капсом (2 или 3 слова) - часто встречается в печатях ЭДО.
+            # Валидатор _caps_name_span обязателен: без него правило превращало
+            # в [ФИО] заголовки разделов («ПРЕДМЕТ ДОГОВОРА», «ПОРЯДОК РАСЧЁТОВ»).
+            (re.compile(r'(?<![а-яёА-ЯЁa-zA-Z])([А-ЯЁ][А-ЯЁ-]{2,}(?:\s+[А-ЯЁ][А-ЯЁ-]{2,}){1,2})(?![а-яёА-ЯЁa-zA-Z])'), TAG_PER, 1, _caps_name_span),
+            # ФИО капсом рядом с инициалами: «ИВАНОВ И.И.» / «И.И. ИВАНОВ».
+            (re.compile(r'(?<![а-яёА-ЯЁa-zA-Z])([А-ЯЁ][А-ЯЁ-]{2,}\s+[А-ЯЁ]\.\s?[А-ЯЁ]\.)'), TAG_PER, 1),
+            (re.compile(r'([А-ЯЁ]\.\s?[А-ЯЁ]\.\s+[А-ЯЁ][А-ЯЁ-]{2,})(?![а-яёА-ЯЁa-zA-Z])'), TAG_PER, 1),
 
             # 6. Связь
             # E-mail, допускаем пробелы вокруг @ и точек (часто бывает при кривом извлечении из PDF)
@@ -317,23 +585,46 @@ class NLPProcessor:
             # 7. Денежные суммы и номера документов (Оставлено из Umbra)
             # Номер документа после «№». Хвостовые «.» / «-» / «/» НЕ захватываем,
             # чтобы не проглотить точку конца предложения («Спецификации № 1.»).
-            (re.compile(r'(№\s*)([\w./\-]*\d[\w/\-]*)'), TAG_DOCNO, 2),
+            (re.compile(r'(№\s*)([\w./\-]*\d[\w/\-]*)'), TAG_DOCNO, 2, _v_docno),
             # Число обёрнуто в АТОМАРНУЮ группу (?>...): без неё, когда за суммой
             # нет слова валюты, движок откатывал «число» посимвольно на каждой
             # стартовой позиции — квадратичное время на длинных рядах сумм.
-            (re.compile(r'(?i)((?>' + num + r')(?:\s*\([^)]*\))?)\s*(' + cur + r')(?![а-яёА-ЯЁa-z])'), TAG_MONEY, 1),
-            (re.compile(r'(?i)(\$|€|USD|EUR)\s*(' + num + r')'), TAG_MONEY, 2),
-            (re.compile(r'(?<!\d)(\d{1,3}(?:[ \xA0\u202F]\d{3})+(?:[,.]\d{2})?)(?!\d)'), TAG_MONEY, 1),
+            (re.compile(r'(?i)((?>' + num + r')(?:\s*\([^)]*\))?)\s*(' + cur + r')(?![а-яёА-ЯЁa-z])'), TAG_MONEY, 1, _v_money),
+            (re.compile(r'(?i)(\$|€|USD|EUR)\s*(' + num + r')'), TAG_MONEY, 2, _v_money),
+            # Сумма прописью в скобках. Отдельное правило нужно потому, что слово
+            # валюты часто уезжает на следующую строку («…(Один миллион двести
+            # пятьдесят тысяч)\nрублей»), а .txt/.pdf обрабатываются построчно —
+            # правило выше туда не дотягивалось, и пропись с точной суммой уходила
+            # в ИИ в открытом виде.
+            (re.compile(r'\(((?:ноль|нуль|один|одна|два|две|три|четыре|пять|шесть|'
+                        r'семь|восемь|девять|десять|одиннадцать|двенадцать|'
+                        r'тринадцать|четырнадцать|пятнадцать|шестнадцать|'
+                        r'семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|'
+                        r'сорок|пятьдесят|шестьдесят|семьдесят|восемьдесят|'
+                        r'девяносто|сто|двести|триста|четыреста|пятьсот|шестьсот|'
+                        r'семьсот|восемьсот|девятьсот|тысяч|миллион|миллиард)'
+                        r'[а-яё]*(?:[^)]{0,300}?(?:тысяч|миллион|миллиард|рубл|'
+                        r'копе|долл|евро|цент)[а-яё]*)[^)]{0,60})\)',
+                        re.IGNORECASE), TAG_MONEY, 1),
+            (re.compile(r'(?<!\d)(\d{1,3}(?:[ \xA0\u202F]\d{3})+(?:[,.]\d{2})?)(?!\d)'), TAG_MONEY, 1, _v_money),
             # Десятичная сумма. Хвост «(?!\.\d)» не даёт спутать её с префиксом даты:
             # в «27.07.2006» фрагмент «27.07» больше НЕ считается суммой.
-            (re.compile(r'(?<!\d)(\d+[,.]\d{2})(?!\d)(?!\.\d)'), TAG_MONEY, 1),
+            # Валидатор отсекает ссылки на нормы («ГОСТ 12.34», «статьями 15.25»).
+            (re.compile(r'(?<!\d)(\d+[,.]\d{2})(?!\d)(?!\.\d)'), TAG_MONEY, 1, _v_money_plain),
             
             # 8. Английские названия и fallback номера
             (re.compile(r'\b(\d{11})\b'), TAG_DOCNO, 1),
             (re.compile(r'\b(\d{14})\b'), TAG_DOCNO, 1),
             (re.compile(r'\b(\d{6})\b'), TAG_INDEX, 1),
-            (re.compile(r'(?<![a-zA-Zа-яёА-ЯЁ])([A-Z][a-zA-Z0-9-]{2,}(?:\s+[A-Z][a-zA-Z0-9-]{2,})*)(?![a-zA-Zа-яёА-ЯЁ])'), TAG_ORG, 1),
+            # Валидатор _latin_org_span обязателен: без него правило скрывало
+            # ЛЮБОЕ латинское слово с заглавной буквы («Force Majeure», «USD»,
+            # «The Agreement»), и англоязычные приложения становились нечитаемыми.
+            (re.compile(r'(?<![a-zA-Zа-яёА-ЯЁ])([A-Z][a-zA-Z0-9-]{2,}(?:\s+[A-Z][a-zA-Z0-9-]{2,})*)(?![a-zA-Zа-яёА-ЯЁ])'), TAG_ORG, 1, _latin_org_span),
         ]
+        # Правила задаются и тройками, и четвёрками (с валидатором) — приводим к
+        # единому виду, чтобы extract_entities не разбирал длину кортежа.
+        self.regexes = [rule if len(rule) == 4 else (rule[0], rule[1], rule[2], None)
+                        for rule in self.regexes]
 
     def _keep_ner_span(self, span_text):
         """Решает, оставлять ли NER-спан (True — скрывать сущность).
@@ -347,7 +638,20 @@ class NLPProcessor:
         if not _LETTER_RE.search(span_text):
             return False
         words = _WORD_RE.findall(span_text)
+        # Названия судов и госорганов — подсудность, а не ПДн. Сверка полными
+        # формами (_INSTITUTION_RE), а не префиксом: основа 'суд' скрыла бы
+        # фамилию «Судаков». HEADING_STEMS здесь НЕ применяем — см. комментарий
+        # к нему: короткие основы съели бы редкие настоящие фамилии.
         if words and all(_is_stop_word(w) for w in words):
+            return False
+        tokens = _WORD_HYPH_RE.findall(span_text)
+        if tokens and all(_is_stop_word(t) or _INSTITUTION_RE.match(t)
+                          for t in tokens):
+            return False
+        # NER регулярно принимает за организацию базисы Инкотермс (EXW, FCA,
+        # DDP), коды валют и служебные английские слова. Это не ПДн, а условия
+        # поставки — без них договор нечитаем.
+        if tokens and all(t.lower() in _LATIN_STOP for t in tokens):
             return False
         return True
 
@@ -429,11 +733,22 @@ class NLPProcessor:
 
         # Regex: скрываем только ЧУВСТВИТЕЛЬНУЮ группу (остальное — «руб.», «№»,
         # «д.» — остаётся в тексте).
-        for pattern, category, group in self.regexes:
+        for pattern, category, group, validate in self.regexes:
             for match in pattern.finditer(text):
                 s, e = match.span(group)
-                if s >= 0 and text[s:e].strip():
-                    replacements.append({'start': s, 'stop': e, 'category': category})
+                if s < 0 or not text[s:e].strip():
+                    continue
+                if validate is not None:
+                    # Валидатор либо отклоняет совпадение (None), либо сужает его
+                    # до действительно чувствительной части. Так широкие запасные
+                    # правила перестают глотать заголовки и обычные слова.
+                    checked = validate(text, s, e)
+                    if checked is None:
+                        continue
+                    s, e = checked
+                    if s >= e or not text[s:e].strip():
+                        continue
+                replacements.append({'start': s, 'stop': e, 'category': category})
                     
         if hide_dates:
             for match in _DATE_RE.finditer(text):
@@ -451,8 +766,12 @@ class NLPProcessor:
         # Разрешение перекрытий ОБЪЕДИНЕНИЕМ (union), а не отбрасыванием: если
         # два спана перекрываются «ступенькой», просто выкинуть один означало бы
         # оставить его непокрытый край в открытом виде (утечка ПДн). Поэтому
-        # перекрывающиеся спаны сливаются в один максимальный интервал; категорию
-        # берём у спана с меньшим start (детерминизм — важно для точного round-trip).
+        # перекрывающиеся спаны сливаются в один максимальный интервал. Категорию
+        # берём НЕ у первого попавшегося, а по фиксированной таблице приоритетов
+        # (_CATEGORY_PRIORITY): раньше побеждал спан с меньшим start, и ФИО,
+        # ошибочно размеченное NER как организация («ПЕТРОВ ПЁТР ПЕТРОВИЧ» →
+        # [ОРГАНИЗАЦИЯ]), получало неверную метку — ИИ видел организацию там, где
+        # человек. Таблица статична, поэтому детерминизм round-trip сохраняется.
         # Для непересекающихся спанов (подавляющее большинство) результат прежний.
         replacements.sort(key=lambda x: (x['start'], -x['stop']))
         merged = []
@@ -460,6 +779,9 @@ class NLPProcessor:
             if merged and rep['start'] < merged[-1]['stop']:
                 if rep['stop'] > merged[-1]['stop']:
                     merged[-1]['stop'] = rep['stop']
+                if (_CATEGORY_PRIORITY.get(rep['category'], 0)
+                        > _CATEGORY_PRIORITY.get(merged[-1]['category'], 0)):
+                    merged[-1]['category'] = rep['category']
             else:
                 merged.append(rep)
         # К каждой замене добавляем 'text' — исходную скрываемую подстроку (для
