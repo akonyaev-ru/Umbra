@@ -14,9 +14,22 @@ from docx import Document
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
+import nlp_engine as nlp_engine_module
 import naming
 
 FIXTURES = Path(__file__).parent / 'fixtures'
+
+_NLP_SINGLETON = []
+
+
+def _shared_nlp():
+    """Один NLPProcessor на весь прогон: загрузка моделей занимает секунды, а
+    параметризованных проверок детекции десятки. Кеш NER на результат не влияет
+    (разметка детерминирована), между документами его сбрасывает process_file."""
+    if not _NLP_SINGLETON:
+        os.chdir(str(src_dir))
+        _NLP_SINGLETON.append(NLPProcessor())
+    return _NLP_SINGLETON[0]
 
 
 def copy_pdf_fixture(tmp_path, name='Договор.pdf'):
@@ -233,7 +246,9 @@ def test_manifest_binds_unchanged_original_without_pii(tmp_path):
     manifest_path = Path(anon + '.umbra.json')
     data = json.loads(manifest_path.read_text(encoding='utf-8'))
     serialized = manifest_path.read_text(encoding='utf-8')
-    assert data['schema'] == 1
+    import security_utils
+    assert data['schema'] == security_utils.MANIFEST_SCHEMA
+    assert data['algo_version'] == nlp_engine_module.ALGO_VERSION
     assert 'mapping' not in data
     assert 'Иванов' not in serialized and 'ivanov@example.org' not in serialized
 
@@ -471,6 +486,203 @@ def test_cleanup_never_runs_before_result_exists(tmp_path):
     with pytest.raises(ValueError, match='паспорт'):
         proc.deanonymize_file(str(answer), str(source))
     assert answer.exists()
+
+
+
+# --------------------------------------------------------------------------- #
+#  Чрезмерная анонимизация                                                     #
+# --------------------------------------------------------------------------- #
+# Инструмент, который прячет заголовки разделов, номера ГОСТов и ссылки на статьи,
+# бесполезен: юрист отправляет ИИ нечитаемый текст и получает бессмысленный ответ.
+# Проверки идут парами — и то, что обязано остаться видимым, и то, что обязано
+# исчезнуть: ослабляя детекторы ради читаемости, легко открыть утечку.
+
+OVER_ANON_KEEP = [
+    ('ДОГОВОР ПОСТАВКИ ТОВАРА', ['ДОГОВОР ПОСТАВКИ ТОВАРА']),
+    ('ПРЕДМЕТ ДОГОВОРА', ['ПРЕДМЕТ ДОГОВОРА']),
+    ('ЦЕНА ДОГОВОРА И ПОРЯДОК РАСЧЁТОВ', ['ЦЕНА ДОГОВОРА', 'ПОРЯДОК РАСЧЁТОВ']),
+    ('ОТВЕТСТВЕННОСТЬ СТОРОН', ['ОТВЕТСТВЕННОСТЬ СТОРОН']),
+    ('ЗАКЛЮЧИТЕЛЬНЫЕ ПОЛОЖЕНИЯ', ['ЗАКЛЮЧИТЕЛЬНЫЕ ПОЛОЖЕНИЯ']),
+    ('АДРЕСА И РЕКВИЗИТЫ СТОРОН', ['АДРЕСА И РЕКВИЗИТЫ СТОРОН']),
+    ('ГЕНЕРАЛЬНЫЙ ДИРЕКТОР', ['ГЕНЕРАЛЬНЫЙ ДИРЕКТОР']),
+    ('ПРАВА И ОБЯЗАННОСТИ СТОРОН', ['ПРАВА И ОБЯЗАННОСТИ СТОРОН']),
+    ('Качество по ГОСТ 12.34-2015 и ТУ 45.67', ['12.34', '45.67']),
+    ('Согласно статьям 15.25 и 330 ГК РФ', ['15.25']),
+    ('См. пункт 5.10 настоящего Договора', ['5.10']),
+    ('непреодолимой силы (Force Majeure)', ['Force Majeure']),
+    ('The Agreement shall be governed by English law', ['Agreement', 'English']),
+    ('Условия поставки: EXW, FCA, DDP по Incoterms 2020', ['EXW', 'FCA', 'DDP']),
+    ('Формат PDF, стандарт ISO 9001', ['PDF', 'ISO']),
+    ('Приложение № 1 «Спецификация»', ['№ 1']),
+    ('в течение 10 (десяти) банковских дней', ['десяти']),
+    ('рублей 00 копеек', ['00']),
+    ('Все споры — в Арбитражном суде города Москвы', ['Арбитражном суде']),
+    ('подтверждённых Торгово-промышленной палатой', ['Торгово-промышленной палатой']),
+    ('см. стр. 15 отчёта', ['стр. 15']),
+]
+
+
+@pytest.mark.parametrize('text,keep', OVER_ANON_KEEP)
+def test_generic_wording_is_not_anonymized(text, keep):
+    out = _shared_nlp().anonymize_text(text)
+    for fragment in keep:
+        assert fragment in out, f'{text!r} -> {out!r}: скрыто лишнее ({fragment!r})'
+
+
+OVER_ANON_HIDE = [
+    ('Директор ИВАНОВ И.И. подписал акт.', ['ИВАНОВ']),
+    ('ПЕТРОВ ПЁТР ПЕТРОВИЧ', ['ПЕТРОВ', 'ПЕТРОВИЧ']),
+    # Фамилии, начинающиеся со стоп-основ: NER метит их как организацию, а
+    # STOP_STEMS ('банк', 'суд', 'поставщик') гасил такой спан целиком.
+    ('Банков Илья Петрович', ['Банков']),
+    ('Судаков Игорь Олегович', ['Судаков']),
+    ('Поставщиков Иван Иванович', ['Поставщиков']),
+    # Короткая основа 'росс' считала «Россошь» указанием страны.
+    ('г. Россошь, ул. Ленина, д. 5', ['Россошь']),
+    # Номер дома и квартиры вне узнаваемого начала адреса.
+    ('Адрес: наб. реки Мойки, д. 12, кв. 5', ['д. 12', 'кв. 5']),
+    ('Microsoft Corporation и Siemens AG', ['Microsoft', 'Siemens']),
+    ('ИНН 7707083893, ОГРН 1027700132195', ['7707083893', '1027700132195']),
+    ('Паспорт 4509 123456', ['4509', '123456']),
+    ('e-mail: a.ivanov@corp.ru', ['a.ivanov@corp.ru']),
+]
+
+
+@pytest.mark.parametrize('text,hide', OVER_ANON_HIDE)
+def test_personal_data_still_hidden(text, hide):
+    out = _shared_nlp().anonymize_text(text)
+    for fragment in hide:
+        assert fragment not in out, f'{text!r} -> {out!r}: утечка ПДн ({fragment!r})'
+
+
+def test_written_amount_hidden_when_currency_word_wraps():
+    """Слово валюты часто уезжает на следующую строку, а .txt и .pdf идут
+    построчно — сумма прописью уходила в ИИ в открытом виде."""
+    lines = ['Цена 500 000 (Пятьсот тысяч)\n', 'рублей 00 копеек.\n']
+    proc = DocumentProcessor(_shared_nlp())
+    from nlp_engine import PlaceholderMapper
+    out = ''.join(proc._anonymize_lines(lines, PlaceholderMapper(),
+                                        True, True, True, False, False))
+    assert 'Пятьсот тысяч' not in out
+
+
+def test_person_wrongly_tagged_as_org_gets_person_label():
+    """При слиянии перекрытий побеждает более конкретная категория: ФИО капсом,
+    которое NER принял за организацию, обязано получить метку [ФИО]."""
+    out = _shared_nlp().anonymize_text('ПЕТРОВ ПЁТР ПЕТРОВИЧ')
+    assert '[ФИО' in out and '[ОРГАНИЗАЦИЯ' not in out
+
+
+def test_label_alternation_is_deterministic():
+    """Порядок альтернации категорий не должен зависеть от рандомизации хешей
+    строк: от него зависит разбор меток, а значит и то, чьи данные подставятся."""
+    proc = DocumentProcessor(_shared_nlp())
+    mapping = {'[ИНН_ЮЛ_1]': 'a', '[ИНН_ФЛ_1]': 'b', '[ДАТА_1]': 'c',
+               '[ДАТА_ВЫДАЧИ_1]': 'd', '[ФИО_1]': 'e'}
+    reversed_mapping = dict(reversed(list(mapping.items())))
+    assert (proc._build_tolerant_re(mapping).pattern
+            == proc._build_tolerant_re(reversed_mapping).pattern)
+    # Длинная категория разбирается целиком, а не как префикс короткой.
+    tol = proc._build_tolerant_re(mapping)
+    assert proc._canonical(tol.search('[ДАТА_ВЫДАЧИ_1]')) == '[ДАТА_ВЫДАЧИ_1]'
+    assert proc._canonical(tol.search('[ИНН_ЮЛ_1]')) == '[ИНН_ЮЛ_1]'
+
+
+def test_restore_refuses_manifest_from_other_algo_version(tmp_path):
+    """Карта не хранится на диске — она строится повторной анонимизацией. После
+    смены правил метки означают другое, поэтому восстановление обязано ОТКАЗАТЬ,
+    а не подставить молча чужие данные."""
+    proc = DocumentProcessor(_shared_nlp())
+    source = tmp_path / 'Договор.txt'
+    source.write_text('Иванов Иван Иванович, ИНН 7707083893', encoding='utf-8')
+    anon = proc.process_file(str(source))
+
+    manifest_path = Path(anon + '.umbra.json')
+    data = json.loads(manifest_path.read_text(encoding='utf-8'))
+    data['algo_version'] = 'выдуманная-старая-версия'
+    manifest_path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+
+    with pytest.raises(ValueError, match='другой версией Umbra'):
+        proc.deanonymize_file(anon, str(source))
+
+
+def test_pdf_redaction_failure_is_not_silent(tmp_path):
+    """Закраска ищет значение средствами fitz, а карта строится по тексту от
+    pdfplumber. Если поиск промахнулся, ПДн остаются в «обезличенном» PDF —
+    такой файл нельзя отдавать пользователю."""
+    from nlp_engine import PlaceholderMapper
+    proc = DocumentProcessor(_shared_nlp())
+    source = copy_pdf_fixture(tmp_path)
+    out = tmp_path / 'out.pdf'
+
+    # Пустая карта = не закрашено ничего. Страховка обязана это заметить.
+    with pytest.raises(ValueError, match='Не удалось надёжно обезличить PDF'):
+        proc._write_redacted_pdf(str(source), str(out), PlaceholderMapper())
+    assert not out.exists(), 'полуфабрикат с ПДн остался на диске'
+
+
+def test_pdf_metadata_and_annotations_are_scrubbed(tmp_path):
+    """README обещает удаление ПДн «из метаданных и скрытых слоёв». Чёрный
+    квадрат их не трогает: автор документа и текст выноски переживали закраску."""
+    import fitz
+    source = copy_pdf_fixture(tmp_path)
+    doc = fitz.open(str(source))
+    doc.set_metadata({'author': 'Кознова Мария Петровна', 'title': 'Дело Иванова',
+                      'subject': 'ИНН 7707083893'})
+    doc[0].add_text_annot((300, 300), 'звонить Петрову +7 999 123-45-67')
+    doc.saveIncr()
+    doc.close()
+
+    out = DocumentProcessor(_shared_nlp()).process_file(str(source))
+    result = fitz.open(out)
+    try:
+        meta = ' '.join(str(v) for v in (result.metadata or {}).values() if v)
+        annots = [a.info.get('content', '')
+                  for page in result for a in (page.annots() or [])]
+    finally:
+        result.close()
+    assert 'Кознова' not in meta and 'Иванова' not in meta and '7707083893' not in meta
+    assert not annots, f'аннотации с ПДн уцелели: {annots}'
+
+
+def test_no_network_imports_in_runtime_code():
+    """Обещание «100% офлайн» должно быть доказуемо: в рабочих модулях не должно
+    быть ни сетевых библиотек, ни ветки на transformers — она тянет модель из
+    интернета при первом обращении и меняет разметку, ломая восстановление."""
+    forbidden = ('requests', 'urllib.request', 'httpx', 'socket', 'transformers')
+    runtime = ['nlp_engine.py', 'doc_processor.py', 'security_utils.py',
+               'md_serializer.py', 'md_merge.py', 'pdf_reader.py', 'naming.py']
+    for name in runtime:
+        text = (src_dir / name).read_text(encoding='utf-8')
+        for module in forbidden:
+            assert f'import {module}' not in text, f'{name}: сетевой импорт {module}'
+
+
+
+def test_every_table_cell_is_anonymized(tmp_path):
+    """Дедупликация объединённых ячеек ключевалась на id(cell._tc). lxml создаёт
+    обёртку над узлом XML на лету и тут же освобождает, а адрес переиспользуется —
+    поэтому обычная ячейка могла совпасть по id() с уже уничтоженной обёрткой
+    другой и молча остаться необработанной. Реквизиты сторон почти всегда лежат
+    в таблице, так что это прямая утечка ПДн в файл, уходящий в облачный ИИ."""
+    proc = DocumentProcessor(_shared_nlp())
+    doc = Document()
+    people = ['Иванов Иван Иванович', 'Петров Пётр Петрович',
+              'Сидоров Сидор Сидорович', 'Кузнецов Кузьма Кузьмич',
+              'Смирнов Семён Семёнович', 'Фёдоров Фёдор Фёдорович']
+    table = doc.add_table(rows=3, cols=2)
+    for index, name in enumerate(people):
+        table.cell(index // 2, index % 2).text = name
+    source = tmp_path / 'reestr.docx'
+    doc.save(str(source))
+
+    out = proc.process_file(str(source))
+    text = '\n'.join(cell.text
+                     for tbl in Document(out).tables
+                     for row in tbl.rows
+                     for cell in row.cells)
+    leaked = [name for name in people if name in text]
+    assert not leaked, f'ячейки таблицы не обезличены: {leaked}'
 
 
 if __name__ == '__main__':
