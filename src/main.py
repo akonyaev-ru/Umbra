@@ -1,14 +1,23 @@
 import logging
+import sys
+
 from gui import UmbraApp
 from doc_processor import DocumentProcessor
 from nlp_engine import NLPProcessor
 
-# Настройка глобального логгера (только вывод в консоль)
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Настройка глобального логгера. Под PyInstaller --noconsole у приложения нет
+# консоли: sys.stderr равен None, и StreamHandler по умолчанию оказался бы
+# привязан к несуществующему потоку. Каждая запись в лог тогда молча уходила бы
+# в обработчик ошибок logging. Поэтому обработчик добавляем, только если поток
+# действительно есть, иначе гасим вывод целиком.
+if sys.stderr is not None:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+else:
+    logging.basicConfig(level=logging.WARNING, handlers=[logging.NullHandler()])
 
 doc_proc_instance = None
 

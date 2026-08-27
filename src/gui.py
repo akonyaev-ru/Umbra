@@ -391,8 +391,14 @@ class UmbraApp(TkinterDnD_CTk):
                 self.drop_target_register(DND_FILES)
                 self.dnd_bind('<<Drop>>', self._on_drop_event)
                 self.dnd_enabled = True
-            except Exception as exc:
-                print(f"Drag-and-drop недоступен: {exc}", file=sys.stderr)
+            except Exception:
+                # print сюда нельзя: под --noconsole sys.stdout и sys.stderr
+                # равны None, и сама попытка сообщить об ошибке роняет запуск
+                # приложения. Drag-and-drop необязателен — файл можно выбрать
+                # кнопкой, поэтому просто отмечаем, что его нет.
+                self.dnd_enabled = False
+                import logging
+                logging.warning("Drag-and-drop недоступен", exc_info=True)
 
         # Кнопки «Обновить» больше нет, а список стартует пустым: без этого
         # вызова пользователь увидел бы пустую панель без единой подсказки.
